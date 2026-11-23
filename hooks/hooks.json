@@ -1,0 +1,14 @@
+{
+  "description": "Loads the project's knowledge-base index at session start, reports entries edited elsewhere before each prompt, and keeps Claude's own KB writes out of that report.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kb.py", "hook", "session-start"], "timeout": 10 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kb.py", "hook", "prompt"], "timeout": 5 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kb.py", "hook", "post-tool"], "timeout": 5 } ] }
+    ]
+  }
+}
