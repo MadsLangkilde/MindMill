@@ -2,9 +2,3 @@
 __pycache__/
 macos/.build/
 macos/build/
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
-android/.idea/
-android/.kotlin/

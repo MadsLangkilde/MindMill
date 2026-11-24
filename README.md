@@ -429,7 +429,7 @@ in a session's prompt dictates into it instead.
   stay in this Mac's Keychain; the phone's audio goes through the Mac. If the API fails, voice falls back to
   built-in and says so.
 
-**The phone app** (`android/`) connects to this Mac over the local network or Tailscale once paired in Settings →
+**The phone app**, [Mindmill for Android](https://github.com/MadsLangkilde/mindmill-android), connects to this Mac over the local network or Tailscale once paired in Settings →
 Remote. It has the backlog, facts, follow-ups, meetings (with the phone listening to the room and sharing its
 screen), sessions, factories, voice, and test builds and review cards from Build. The protocol is in
 [docs/remote-api.md](docs/remote-api.md).
@@ -445,5 +445,4 @@ Markdown files with flat frontmatter.
 ```
 python3 -m unittest discover -s tests
 cd macos && swift test
-cd android && ./gradlew testDebugUnitTest
 ```
