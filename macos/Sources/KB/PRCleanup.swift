@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 enum PRAutoCleanup {
@@ -47,10 +48,7 @@ extension AppModel {
     }
 
     /// The Build sessions about a pull request: its own, or one on a work item it belongs to.
-    func sessions(aboutPR id: Int) -> [WorkSession] {
-        let items = Set((myWork?.items ?? []).filter { $0.prs.contains { $0.id == id } }.map(\.sessionKey))
-        return buildSessions.filter { $0.about == "mypr:\(id)" || ($0.about.map(items.contains) ?? false) }
-    }
+    func sessions(aboutPR id: Int) -> [WorkSession] { engine.sessions.sessions(aboutPR: id) }
 }
 
 /// What to remove after a pull request is merged: worktrees, the local branch, the branch on the server, and

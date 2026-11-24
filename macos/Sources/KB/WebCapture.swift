@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 import WebKit
 

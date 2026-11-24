@@ -1,5 +1,6 @@
 import Foundation
 import KBCore
+import KBEngine
 import Network
 
 /// Serves the action layer as an MCP server on 127.0.0.1, for Claude Code sessions this app starts (the voice
@@ -69,21 +70,10 @@ final class LocalActionServer {
     }
 
     private func respond(_ r: HTTPRequest) async -> Data {
-        guard r.header("authorization") == "Bearer \(token)" else {
-            return HTTPRequest.response(status: 401, reason: "Unauthorized")
-        }
-        guard r.path.hasPrefix("/mcp") else { return HTTPRequest.response(status: 404, reason: "Not Found") }
-        guard r.method == "POST" else { return HTTPRequest.response(status: 405, reason: "Method Not Allowed") }
-        guard let message = try? JSONDecoder().decode(JSONValue.self, from: r.body) else {
-            return HTTPRequest.response(status: 400, reason: "Bad Request")
-        }
-        if case .array(let batch) = message {
-            var replies: [JSONValue] = []
-            for m in batch { if let reply = await mcp.handle(m) { replies.append(reply) } }
-            if replies.isEmpty { return HTTPRequest.response(status: 202, reason: "Accepted") }
-            return HTTPRequest.response(status: 200, reason: "OK", body: (try? JSONEncoder().encode(JSONValue.array(replies))) ?? Data())
-        }
-        guard let reply = await mcp.handle(message) else { return HTTPRequest.response(status: 202, reason: "Accepted") }
-        return HTTPRequest.response(status: 200, reason: "OK", body: (try? JSONEncoder().encode(reply)) ?? Data())
+        await MCPHTTP.respond(r, token: token, mcp: mcp)
     }
+}
+
+extension LocalActionServer: ActionEndpoint {
+    func mcpConfig() async -> String? { await ready() }
 }

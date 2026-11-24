@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 
 extension AppModel {
     /// Puts the screens' columns, sidebar order, folded sections and panel places back the way KB comes.

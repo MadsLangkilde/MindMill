@@ -1,12 +1,21 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension Color {
     /// `#RRGGBB`; nil when empty or not a colour.
     init?(hex: String) {
-        guard let c = AppTheme.rgb(hex) else { return nil }
-        self.init(red: c.r, green: c.g, blue: c.b)
+        let pair = AppTheme.variants(hex)
+        guard let light = AppTheme.rgb(pair.light), let dark = AppTheme.rgb(pair.dark) else { return nil }
+        if pair.light == pair.dark {
+            self.init(red: light.r, green: light.g, blue: light.b)
+            return
+        }
+        self.init(nsColor: NSColor(name: nil) { appearance in
+            let c = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: c.r, green: c.g, blue: c.b, alpha: 1)
+        })
     }
 
     var hex: String {

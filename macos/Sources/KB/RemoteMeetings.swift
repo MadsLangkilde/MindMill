@@ -1,5 +1,6 @@
 import Foundation
 import KBCore
+import KBEngine
 
 /// Meetings run from the phone: it hears the room and shows its screen; the Mac keeps the notes and writes the
 /// summary, the same as a meeting started on the Mac.

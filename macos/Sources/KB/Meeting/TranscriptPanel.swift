@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// The live transcript beside the notes: the speech-to-text lines, what is being heard now, and Claude's flags.

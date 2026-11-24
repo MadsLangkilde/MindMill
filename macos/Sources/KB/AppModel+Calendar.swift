@@ -1,27 +1,7 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
-
-struct CalendarSyncState: Equatable {
-    var lastRun: Date?
-    var lastSuccess: Date?
-    var summary: String?
-    var error: String?
-    var inFlight = false
-    /// The days the running sync covers.
-    var range: (from: String, to: String)?
-    /// A later week the user asked for while a sync ran; it goes next.
-    var queued: (from: String, to: String)?
-    /// Syncs that have ended, and the days the last one covered: what `kb sync` waits for.
-    var finished = 0
-    var lastFinishedRange: (from: String, to: String)?
-
-    static func == (a: Self, b: Self) -> Bool {
-        a.lastRun == b.lastRun && a.lastSuccess == b.lastSuccess && a.summary == b.summary && a.error == b.error
-            && a.inFlight == b.inFlight && a.range?.from == b.range?.from && a.range?.to == b.range?.to
-            && a.queued?.from == b.queued?.from && a.queued?.to == b.queued?.to
-    }
-}
 
 /// Calendar sync, the automatic morning routine, and connector sign-in.
 extension AppModel {
@@ -59,6 +39,7 @@ extension AppModel {
         startDay()
         scheduleSyncTimer()
         refreshPeople()
+        checkSprints(force: true)
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.appBecameActive() }
@@ -95,85 +76,34 @@ extension AppModel {
         }
         if pullRequests != nil { refreshPullRequests() }
         if myWork != nil || mode == .build { refreshMyWork() }
+        checkSprints()
         scheduleSharingRefresh(after: 0)
     }
 
-    /// Mirrors today's and tomorrow's events as meeting files through a short headless session.
     /// Days ahead the regular sync mirrors: today through the end of next week and a little more.
-    static let calendarDaysAhead = 13
+    static let calendarDaysAhead = RoutineCenter.calendarDaysAhead
 
     /// Mirrors Outlook events as meeting files: by default today through two weeks on; `from`/`to` for a week the
     /// user opens in the meetings calendar.
     func syncCalendar(from requestedFrom: String? = nil, to requestedTo: String? = nil) {
-        if let requestedFrom, let requestedTo, calendar.isRunning || morning.isBusy {
-            calendarSync.queued = (requestedFrom, requestedTo)
-            return
-        }
-        guard !calendar.isRunning, !morning.isBusy else { return }
-        let from = requestedFrom ?? KBDate.today()
-        let to = requestedTo ?? KBDate.today(Calendar(identifier: .gregorian).date(byAdding: .day, value: Self.calendarDaysAhead, to: Date()) ?? Date())
-        guard let launch = launch(prompt: ClaudeModes.calendar(from: from, to: to), sessionID: UUID().uuidString.lowercased(),
-                                  resume: false, model: calendarModel, cwd: rootURL,
-                                  tools: ["Bash(kb:*)", "Bash(python3:*)", "mcp__claude_ai_Microsoft_365__outlook_calendar_search"]) else { return }
-        calendar.onEvent = { [weak self] event in self?.calendarEvent(event) }
-        do {
-            try calendar.start(launch, mode: "calendar")
-        } catch {
-            calendarSync.error = error.localizedDescription
-            return
-        }
-        if requestedFrom == nil { calendarSync.lastRun = Date() }
-        calendarSync.inFlight = true
-        calendarSync.range = (from, to)
-        calendar.send(ClaudeModes.warmup, tag: "connect", show: false)
-        calendar.send("sync", tag: "calendar", show: false)
+        engine.routines.syncCalendar(from: requestedFrom, to: requestedTo)
     }
 
-    private func calendarEvent(_ event: ClaudeEvent) {
-        switch event {
-        case .turnResult(let text, let isError, let tag) where tag == "calendar":
-            calendarSync.inFlight = false
-            let line = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
-                .first { !$0.isEmpty } ?? ""
-            if !isError, line.hasPrefix("calendar:") {
-                calendarSync.summary = line
-                calendarSync.error = nil
-                calendarSync.lastSuccess = Date()
-                if microsoft365NeedsSignIn { microsoft365Status = "connected" }
-            } else {
-                calendarSync.error = line.hasPrefix("ERROR") ? String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces) : (line.isEmpty ? "Calendar sync failed." : line)
-                // Claude Code reports the connector as connected while Microsoft refuses its sign-in.
-                if ConnectorSignIn.isNeeded(text) { microsoft365Status = "needs-auth" }
-                checkConnectors(force: true)
-            }
-            calendarSync.finished += 1
-            calendarSync.lastFinishedRange = calendarSync.range
-            calendar.stop()
-            calendarSync.range = nil
-            reload()
-            runMorningIfDue()
-            syncQueuedWeek()
-        case .exited:
-            guard calendarSync.inFlight else { return }
-            calendarSync.inFlight = false
-            calendarSync.finished += 1
-            calendarSync.lastFinishedRange = calendarSync.range
-            calendarSync.range = nil
-            calendarSync.error = "\(Brain.name) stopped before the calendar was synced."
-            runMorningIfDue()
-            syncQueuedWeek()
-        default:
-            break
+    /// The routines' connector hooks: a failed run checks the connectors, a good calendar sync clears a sign-in problem.
+    func wireRoutines() {
+        let r = engine.routines
+        r.onConnectorTrouble = { [weak self] text in
+            guard let self else { return }
+            // Claude Code reports the connector as connected while Microsoft refuses its sign-in.
+            if ConnectorSignIn.isNeeded(text) { microsoft365Status = "needs-auth" }
+            checkConnectors(force: true)
         }
-    }
-
-    private func syncQueuedWeek() {
-        guard let q = calendarSync.queued else { return }
-        calendarSync.queued = nil
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1))
-            syncCalendar(from: q.from, to: q.to)
+        r.onCalendarSynced = { [weak self] in
+            guard let self, microsoft365NeedsSignIn else { return }
+            microsoft365Status = "connected"
         }
+        r.afterCalendar = { [weak self] in self?.runMorningIfDue() }
+        r.needsSignIn = { [weak self] in self?.microsoft365NeedsSignIn ?? false }
     }
 
     private func runMorningIfDue() {
@@ -250,13 +180,11 @@ extension AppModel {
         }
         if id.section == .meetings { closeMeetingController(id) }
         busyEntries.insert(id)
-        let cli = cli
         Task {
             do {
-                let out = try await cli.run(["move", id.rawValue, "--project", project])
+                let moved = try await engine.moveEntry(id, to: project)
                 busyEntries.remove(id)
-                reload()
-                if let raw = out.components(separatedBy: .newlines).first, let new = EntryID(raw) {
+                if let new = moved {
                     notice = "Moved to \(index.project(project)?.title ?? project)."
                     then?(new)
                 }

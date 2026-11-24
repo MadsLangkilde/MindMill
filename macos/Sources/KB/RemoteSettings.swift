@@ -1,6 +1,7 @@
 import AppKit
 import CoreImage.CIFilterBuiltins
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Settings → Remote: let the Mindmill app on a phone reach this Mac, on the same network or over Tailscale.
@@ -31,6 +32,7 @@ struct RemoteSettingsView: View {
                 Section("Pair a phone") { PairingView(remote: remote) }
             }
             Section("Paired phones") { PairedPhonesView(remote: remote) }
+            Section("Push to iPhones") { PushSettingsView(pusher: model.pusher) }
             Section { TroubleshootingView() }
         }
         .formStyle(.grouped)

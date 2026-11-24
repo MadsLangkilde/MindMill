@@ -30,10 +30,13 @@ name, that skill wins. This one is the project-aware default.
 The item usually comes from somewhere: a follow-up, a meeting's action item, a decision, a reminder, or the
 user's own words. Read it (`kb show <id>`) and what it links to, so the draft builds on it and picks up
 details already decided (a parent id like 417760, the platform, the sprint). An action item that says
-"PBI(s)" may need more than one item; propose the split as a choice.
+"PBI(s)" may need more than one item; propose the split as a choice. "One per platform" (Android and iOS) means
+twins: one entry in each platform's scope, linked to each other through `related` (step 7).
 
-Then check it doesn't exist already: `kb list --section backlog` (proposals and created items) and
-`kb tracker items --search "<2–3 keywords>"` (Azure DevOps, also closed items). When one covers it, show it
+Then check it doesn't exist already: `kb list --section backlog` (proposals and created items),
+`kb tracker items --search "<2–3 keywords>"` (Azure DevOps; every word must be in the title), and, once the draft is
+written, `kb backlog duplicates --entry <id>` (the tracker's open and recent items, the parent feature's children and
+the other proposals, scored as likely, possible or no duplicate). When one covers it, show it
 (number, title, state) and ask: "Use #<n>" (on a follow-up, close it with `--resolved-by <its url>`) /
 "Create a new one anyway" / "Make it a child of #<n>". Don't draft until the user picks.
 
@@ -66,10 +69,15 @@ PBI or Bug. Skip when the source says it.
 
 ## 4. Parent
 
-Options, in this order and only those that exist: a parent named in the source (check it with
-`kb tracker item <id>` and show its title), `tracker.default_parent`, two or three likely features from
-`kb tracker features --search "<keyword>"`, then "No parent". When the user types a keyword, search
+A parent named in the source settles it without asking: a work item link (`…/_workitems/edit/431006`), `#431006`,
+"Feature 431006", "under Feature #431006". Check it with `kb tracker item <id>` and show its title in step 8.
+Otherwise the options, in this order and only those that exist: `tracker.default_parent`, two or three likely
+features from `kb tracker features --search "<keyword>"`, then "No parent". When the user types a keyword, search
 features with it and offer the matches.
+
+The parent always goes in the entry's `parent` field (`--field parent=<number>`), never only in the text: a
+`Parent: Feature #…` line in the description doesn't link anything by itself. Write `parent=none` only when there
+really is none.
 
 ## 5. Sprint
 
@@ -101,6 +109,7 @@ Write it as a backlog entry in the scope that owns the tracker (Android's items 
 kb new backlog --project <p> --type pbi|bug --title "…" --summary "…" --source <ids, comma-separated> \
   [--tags a,b] [--field sprint="<iteration path>"|none] [--field parent=<id>|none] \
   [--field area="<path>"|none] [--field assignee=<user>|none] [--field found_in="1.0.0 (57)"] \
+  [--field related="[<other entry ids or work item numbers>]"] \
   --body-stdin <<'EOF'
 ## Description
 …
@@ -112,6 +121,12 @@ EOF
 
 When a matching proposed backlog entry already exists (`kb list --section backlog`, or one waiting in the
 inbox), update and use that one instead of drafting a second.
+
+**Siblings.** Items drafted together for the same work (one per platform, or the parts of one change) name each
+other in `related`: write the first, give the next `--field related="[<first entry id>]"`, and add the later ones to
+the earlier ones with `kb backlog link <earlier entry> --related <later entry> --yes`. Use work item numbers for items
+that already exist in the tracker. When they are created, `kb backlog create` links them as Related in the tracker
+and writes the numbers back; the entry ids never reach the tracker.
 
 **Work items are shared with the team; the KB is only on this machine.** Never put KB entry ids
 (`product/decisions/…`), KB file paths, `kb://` links or other local paths in the title, description or
@@ -128,8 +143,12 @@ entry and ask again until the user picks Create or Keep.
 
 ## 9. Create (only on approval)
 
-`kb backlog create <id> --yes`. Print the work item id and URL from its output as a Markdown link.
-A dry run without `--yes` prints exactly what would be posted.
+`kb backlog create <id> [<sibling id>…] --yes`. Print the work item id and URL from its output as a Markdown link.
+A dry run without `--yes` prints exactly what would be posted, including the parent and related links. When the
+`parent` field is empty or `none` but the description or the source clearly names one, it links that one and says
+so; `--parent <n>|none` overrides. To fix the links of items already created, use
+`kb backlog link <entry or number>… [--parent <n>|none] [--related <n or entry>…] --yes` (several given together are
+linked as related to each other).
 
 Then, when it came from a follow-up, ask whether to close it:
 `kb followup close <followup id> --status done --resolved-by "<work item url>"`. When several items
@@ -156,17 +175,23 @@ Never create a work item without the user's explicit approval in this conversati
   ```
   A bug's steps to reproduce go in `--repro`. It prints `created <id>`: tell the user "#<id> in Mindmill's
   tracker". From a follow-up, close it with `--resolved-by "#<id> in Mindmill's tracker"`.
+- A backlog entry in a local scope (one a meeting proposed) is created with `kb backlog create <id> --yes` instead:
+  its `parent` must be a feature in the tracker, and `related` items are linked both ways in `work.json`.
 
 **`jira`**: work goes through Claude's Jira connector, not `kb`. Find its tools (names containing `jira` or
 `atlassian`). None connected: say so ("Jira isn't connected in this session; connect it, or keep this as a
 draft") and stop. Otherwise use them for the duplicate check, the parent (an epic) and the sprint, draft in
 chat, and on approval create the issue (Story for a PBI, Bug, Task) with the description and acceptance
-criteria. Print its key as a link. The same rule holds: no KB ids or local paths in it.
+criteria. A backlog entry's `parent` is the epic to put it under, and its `related` items (the issue keys of other
+entries once created, or keys written there) each get a "relates to" link. Then set the entry's `status: created`,
+`work_item` and `url`. Print its key as a link. The same rule holds: no KB ids or local paths in it.
 
 ## Proposing from the knowledge base
 
-When asked to "propose work" (or from `kb:today`): scan open follow-ups of kind `action`, meeting action
+When asked to "propose work" (or from `mindmill:today`): scan open follow-ups of kind `action`, meeting action
 items, and active decisions whose consequences need code that doesn't exist yet (grep for it). Draft each
-as a backlog entry with `status: proposed` and `source` pointing at what it came from. Check
-`kb list --section backlog --include-superseded` and `kb tracker items --search "<keyword>"` first, so
-nothing is proposed twice. Never create items in this mode; the user picks in the app.
+as a backlog entry with `status: proposed` and `source` pointing at what it came from, with `parent` and `related`
+set as in steps 4 and 7. Check `kb list --section backlog --include-superseded` and
+`kb tracker items --search "<keyword>"` first, and `kb backlog duplicates --scope <p>` after, so nothing is proposed
+twice: drop a proposal a work item already covers (`kb backlog drop <id> --duplicate-of <n> --yes`) and name the
+possible duplicates in your reply. Never create items in this mode; the user picks in the app.

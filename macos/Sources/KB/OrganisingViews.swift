@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
@@ -24,15 +25,8 @@ extension AppModel {
 
     /// Claude reads the open follow-ups of a scope and proposes merging the ones that say the same thing.
     func findDuplicateFollowups(project: String) {
-        guard !findingDuplicates else { return }
-        findingDuplicates = true
-        let prompt = "List the open follow-ups of scope `\(project)` (`kb list --section followups --project \(project)`; read any you need with `kb show <id>`). Find pairs that ask or do the same thing, even in different words; a follow-up merely on the same topic is not a duplicate. For each pair run `kb followup propose-merge <the one to keep> <the duplicate> --why '<one line>'`, keeping the one with more detail. Change nothing else. Reply with one line: `PROPOSED <n>`."
         Task {
-            let reply = await claudeOnce(prompt, system: "You find duplicate follow-ups in a knowledge base and propose merges; the user decides.",
-                                         model: backgroundModel, tools: ["Bash(kb:*)", "Read"], timeout: 240)
-            findingDuplicates = false
-            reload()
-            let n = reply.flatMap { r in r.components(separatedBy: "PROPOSED ").last.flatMap { Int($0.prefix { $0.isNumber }) } } ?? 0
+            guard let n = await engine.plan.findDuplicateFollowups(project: project) else { return }
             notice = n == 0 ? "No duplicate follow-ups found." : "Found \(n) possible duplicate\(n == 1 ? "" : "s"). Review them at the top of Follow-ups."
         }
     }
@@ -45,43 +39,13 @@ extension AppModel {
 
     /// Claude compares the fact with the others in its project and suggests related ones, for the user to accept or reject.
     func suggestFactLinks(_ id: EntryID) {
-        guard let fact = index.entry(id), !suggestingLinks.contains(id) else { return }
-        let linked = Set(index.linkedFacts(of: id).map(\.id))
-        let rejected = Set(factLinkRejected[id.rawValue] ?? [])
-        let scopes = Set([id.project] + index.siblings(of: id.project).map(\.id))
-        let others = index.entries.values.filter {
-            $0.section == .facts && $0.id != id && !$0.isDraft && scopes.contains($0.id.project)
-                && !linked.contains($0.id) && !rejected.contains($0.id.rawValue)
-        }
-        guard !others.isEmpty else {
+        guard index.entry(id) != nil, !suggestingLinks.contains(id) else { return }
+        guard !engine.plan.linkCandidates(id).isEmpty else {
             notice = "No other facts to link to."
             return
         }
-        suggestingLinks.insert(id)
-        let list = others.sorted { $0.id.rawValue < $1.id.rawValue }.prefix(300)
-            .map { "- \($0.id.rawValue): \($0.title)\($0.summary.isEmpty ? "" : " — \($0.summary.prefix(160))")" }
-            .joined(separator: "\n")
-        let prompt = """
-        The fact:
-        \(fact.title)
-        \(fact.summary)
-        \(fact.body.prefix(1500))
-
-        Other facts:
-        \(list)
-
-        Which other facts are directly related to this one: one depends on, explains, contradicts or completes the other \
-        (for example "the BFF issues tokens" and "the device validates them")? Sharing a word or an area isn't enough. \
-        Reply with only a JSON array, at most 6, best first: [{"id": "<id>", "why": "<a few words>"}], or [] for none.
-        """
-        let candidates = Set(others.map(\.id.rawValue))
         Task {
-            let reply = await claudeOnce(prompt, system: "You suggest links between facts in a knowledge base. Reply with JSON only.",
-                                         model: backgroundModel)
-            suggestingLinks.remove(id)
-            let found = FactLinkSuggestion.parse(reply ?? "", candidates: candidates)
-            factLinkSuggestions[id.rawValue] = found
-            if found.isEmpty { notice = "\(Brain.name) found no closely related facts." }
+            if let found = await engine.plan.suggestFactLinks(id), found.isEmpty { notice = "\(Brain.name) found no closely related facts." }
         }
     }
 
@@ -90,27 +54,9 @@ extension AppModel {
         if let other = EntryID(s.id) { linkFacts(id, other) }
     }
 
-    func rejectLinkSuggestion(_ s: FactLinkSuggestion, for id: EntryID) {
-        factLinkSuggestions[id.rawValue]?.removeAll { $0 == s }
-        factLinkRejected[id.rawValue, default: []].append(s.id)
-        saveFactLinkRejected()
-    }
+    func rejectLinkSuggestion(_ s: FactLinkSuggestion, for id: EntryID) { engine.plan.rejectLinkSuggestion(s, for: id) }
 
-    private var factLinkRejectedURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KB/factlinks-rejected.json")
-    }
-
-    func loadFactLinkRejected() {
-        guard let data = try? Data(contentsOf: factLinkRejectedURL),
-              let map = try? JSONDecoder().decode([String: [String]].self, from: data) else { return }
-        factLinkRejected = map
-    }
-
-    private func saveFactLinkRejected() {
-        guard let data = try? JSONEncoder().encode(factLinkRejected) else { return }
-        try? FileManager.default.createDirectory(at: factLinkRejectedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: factLinkRejectedURL, options: .atomic)
-    }
+    func loadFactLinkRejected() { engine.plan.loadRejected() }
 
     /// Runs a `kb` command, then reloads; `done` gets its output. Errors go to the alert.
     func runKB(_ args: [String], busy: EntryID?, done: @escaping @MainActor (String) -> Void) {

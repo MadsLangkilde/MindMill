@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Build's sidebar: Test, with whether the current project is set up.
@@ -42,7 +43,7 @@ struct TestView: View {
                         ListEmptyState(title: "Nothing to test found", systemImage: "magnifyingglass",
                                        message: model.repositories(of: scope).work.contains { $0.checkout != nil }
                                         ? "Mindmill didn't recognise an app, site, service or firmware in this project's repositories."
-                                        : "This project has no repository on this Mac. Add one in Projects and Scopes.") {
+                                        : "This project has no repository on this Mac. Add a location in Edit Projects and Scopes.") {
                             Button("Look Again") { model.detectTestTargets(scope) }
                         }
                     } else {
@@ -350,9 +351,10 @@ private struct TargetOptions: View {
                 field("Local URL", \.url, "e.g. http://localhost:3000")
                 TextField("Port", text: Binding(get: { target.port.map(String.init) ?? "" },
                                                 set: { v in model.testing.editTarget(scope, target.id) { $0.port = Int(v) } }))
-                TextField(target.type == .backend ? "Endpoints to call, one per line (GET /health)" : "Pages to open first, one per line",
-                          text: Binding(get: { target.pages.joined(separator: "\n") },
-                                        set: { v in model.testing.editTarget(scope, target.id) { $0.set("pages", v) } }), axis: .vertical)
+                ListField(placeholder: target.type == .backend ? "Endpoints to call, one per line (GET /health)" : "Pages to open first, one per line",
+                          items: Binding(get: { target.pages },
+                                         set: { v in model.testing.editTarget(scope, target.id) { $0.set("pages", v.joined(separator: "\n")) } }),
+                          perLine: true)
                     .lineLimit(2...6)
             }
             if target.type == .ios {
@@ -463,8 +465,8 @@ struct TestAskCard: View {
         AdaptiveCardLayout(spacing: 10, stackedSpacing: 8, minInfoWidth: 220) {
             Image(systemName: "checkmark.seal").foregroundStyle(.green).font(.title3)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Try what this session builds on your phone?").font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-                Text("Set up testing\(type.map { " for this \($0.title.lowercased())" } ?? "") once, and builds reach you at each checkpoint.")
+                Text(TestAskText.question(type)).font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                Text(TestAskText.detail(type, facts: model.currentTestFacts))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -481,24 +483,33 @@ struct TestAskCard: View {
     }
 }
 
-/// The session header's menu items for testing.
-struct TestSessionMenuItems: View {
+/// The session header's Test menu: deliver what the session builds to the phone, a preview or a link, or set it up.
+struct TestHeaderButton: View {
     @Environment(AppModel.self) private var model
     let session: WorkSession
 
     var body: some View {
-        if let scope = session.project {
-            let plan = model.testing.store[scope]
+        let scope = session.project ?? ""
+        let plan = model.testing.store[scope]
+        let busy = plan.targets.contains { model.testing.working[$0.id] != nil }
+        Menu {
             if plan.isSetUp {
                 ForEach(plan.targets.filter { $0.method != nil }) { t in
-                    Button(plan.targets.count > 1 ? "Deliver \(t.title) to Phone" : "Deliver to Phone") {
+                    Button(plan.targets.count > 1 ? "Deliver \(t.title)" : "Deliver to Phone") {
                         Task { await model.deliverTest(scope: scope, targetID: t.id, session: session.id) }
                     }
                     .disabled(model.testing.working[t.id] != nil || !model.testTargetReady(t))
                 }
+                Divider()
+                Button("Open Test…") { model.openTestMenu(scope: scope) }
             } else {
                 Button("Set Up Testing…") { model.openTestMenu(scope: scope) }
             }
+        } label: {
+            Label(busy ? "Delivering…" : "Test", systemImage: "iphone.and.arrow.forward")
         }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Deliver what this session builds to your phone, a preview or a link")
     }
 }

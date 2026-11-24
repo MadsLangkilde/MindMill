@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Meetings as a month calendar: pick a day to see its meetings; a search lists matches from every day.

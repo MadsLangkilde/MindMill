@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import Observation
 import SwiftUI
 
@@ -47,15 +48,19 @@ struct NewEntryRequest: Identifiable, Equatable {
 @MainActor
 @Observable
 final class AppModel {
-    static let lastProjectKey = "lastProjectID"
+    static let lastProjectKey = MindmillEngine.lastScopeKey
 
-    var rootPath: String
-    private(set) var rootOverride: Bool
-    var index: KBIndex = .empty
-    var loadError: KBLoadError?
+    /// The knowledge base, its scopes, the `kb` CLI, the actions and the companion hub. The app observes it and
+    /// forwards to it, so what the phone or a voice session changes shows at once.
+    let engine: MindmillEngine
+
+    var rootPath: String { engine.rootPath }
+    var rootOverride: Bool { engine.rootOverride }
+    var index: KBIndex { engine.index }
+    var loadError: KBLoadError? { engine.loadError }
 
     /// Everything the sidebar, lists, timeline and counts show is limited to this project.
-    private(set) var projectID: String?
+    var projectID: String? { engine.scope }
     var sidebarSelection: SidebarItem? = .section(.decisions)
     private(set) var selectedEntryID: EntryID?
     var searchText = ""
@@ -71,10 +76,13 @@ final class AppModel {
     var notice: String?
 
     /// Bumped on every reload, so views holding their own state can refresh from disk.
-    private(set) var indexVersion = 0
+    var indexVersion: Int { engine.indexVersion }
     var dailyDate = KBDate.today()
     private(set) var dailyPlan: DailyPlan?
-    var shell: LoginShell.Resolved?
+    var shell: LoginShell.Resolved? {
+        get { engine.shell }
+        set { engine.shell = newValue }
+    }
     var busyEntries: Set<EntryID> = []
     var inboxSelection: Set<EntryID> = []
     /// Two or more entries picked in a list (⌘-click, ⇧-click): the detail shows actions for all of them.
@@ -86,24 +94,51 @@ final class AppModel {
     var captureRequests: [String: WebCaptureRequest] = [:]
     var projectSettingsRequest: ProjectSettingsRequest?
     var newMeetingRequest: NewMeetingRequest?
-    var morning = ClaudeChat()
-    var email = ClaudeChat()
-    var emailSync = EmailSyncState()
+    var morning: ClaudeChat {
+        get { engine.routines.morning }
+        set { engine.routines.morning = newValue }
+    }
+    var email: ClaudeChat {
+        get { engine.routines.email }
+        set { engine.routines.email = newValue }
+    }
+    var emailSync: EmailSyncState {
+        get { engine.routines.emailSync }
+        set { engine.routines.emailSync = newValue }
+    }
     var reminders: [Reminder] = []
     var selectedReminderID: String?
     var todaySelection: TodaySelection?
     var todayAllScopes = UserDefaults.standard.bool(forKey: "todayAllScopes")
     var todayHiddenMeetings: Set<String> = []
-    var people = People()
-    @ObservationIgnored var peopleLoaded = false
-    var peopleSyncing = false
+    var people: People {
+        get { engine.plan.people }
+        set { engine.plan.people = newValue }
+    }
+    var peopleLoaded: Bool {
+        get { engine.plan.peopleLoaded }
+        set { engine.plan.peopleLoaded = newValue }
+    }
+    var peopleSyncing: Bool {
+        get { engine.plan.peopleSyncing }
+        set { engine.plan.peopleSyncing = newValue }
+    }
     var reminderSheet: ReminderSheetRequest?
     var goals: [Goal] = []
     var selectedGoalID: String?
     var goalSheet: GoalSheetRequest?
-    @ObservationIgnored var goalChats: [String: ClaudeChat] = [:]
-    var calendar = ClaudeChat()
-    var calendarSync = CalendarSyncState()
+    var goalChats: [String: ClaudeChat] {
+        get { engine.plan.goalChats }
+        set { engine.plan.goalChats = newValue }
+    }
+    var calendar: ClaudeChat {
+        get { engine.routines.calendar }
+        set { engine.routines.calendar = newValue }
+    }
+    var calendarSync: CalendarSyncState {
+        get { engine.routines.calendarSync }
+        set { engine.routines.calendarSync = newValue }
+    }
     /// The claude.ai Microsoft 365 connector's status from the latest Claude session (`connected`, `needs-auth`, …).
     var microsoft365Status = ""
     /// The servers `claude mcp list` showed last, and when.
@@ -115,7 +150,12 @@ final class AppModel {
     @ObservationIgnored var connectorFixStarted: Date?
     /// Meetings whose window should start taking notes as soon as it opens.
     var pendingStart: Set<EntryID> = []
-    @ObservationIgnored var backgroundStarted = false
+    @ObservationIgnored var backgroundStarted = false {
+        didSet {
+            engine.sessions.backgroundChecks = backgroundStarted
+            engine.plan.backgroundStarted = backgroundStarted
+        }
+    }
     @ObservationIgnored var lastAutoDay: String?
     @ObservationIgnored var syncTimer: Timer?
     @ObservationIgnored var morningAfterSync = false
@@ -123,7 +163,10 @@ final class AppModel {
     var pendingPrepare: Set<EntryID> = []
     var askConversations: [String: AskConversation] = [:]
     /// When the goal coach of each goal last had a message, so Plan → Sessions lists it.
-    var goalCoachUpdated: [String: Date] = [:]
+    var goalCoachUpdated: [String: Date] {
+        get { engine.plan.goalCoachUpdated }
+        set { engine.plan.goalCoachUpdated = newValue }
+    }
     /// Meeting chats kept in Application Support, by meeting: how many messages, and when they last changed.
     var meetingChats: [EntryID: (count: Int, updated: Date)] = [:]
     @ObservationIgnored var meetingChatsLoaded = false
@@ -143,32 +186,21 @@ final class AppModel {
     }
     /// Build mode's detail: nil is the overview, otherwise a session id.
     var buildSelection: String?
-    var factories: [Factory] = []
     var factoryEditor: FactoryEditRequest?
     var workItemDetails: [Int: WorkItemDetail] = [:]
     var claudeFind = ClaudeFind()
     /// Counts ⌘F presses, so the view in front can open its find bar.
     var findRequest = 0
     var workItemDetailLoading: Set<Int> = []
-    /// Side conversations on factory questions, by question id: copies of the asking session, never saved.
-    var factoryAsides: [UUID: ClaudeChat] = [:]
-    @ObservationIgnored var coverageChecking: Set<UUID> = []
-    @ObservationIgnored var factoriesLoaded = false
-    @ObservationIgnored var factoryLastTick = Date.distantPast
-    @ObservationIgnored var factoryAssigning: Set<Int> = []
-    var scans: [ScanRun] = []
-    @ObservationIgnored var scanChats: [String: ClaudeChat] = [:]
-    @ObservationIgnored var scansLastRead = Date.distantPast
-    @ObservationIgnored var scansLoaded = false
     var projectPane: ProjectPane = .home
     var addProjectRequest: AddProjectRequest?
-    var scanApplying: Set<String> = []
-    var scanActivity: [String: String] = [:]
-    var strategies: [Strategy] = []
     var strategiesSheet: StrategiesSheetRequest?
     var newLeadRequest: NewLeadRequest?
     var factCheck = FactCheckState()
-    var followupWatch = FollowupWatchState()
+    var followupWatch: FollowupWatchState {
+        get { engine.plan.followupWatch }
+        set { engine.plan.followupWatch = newValue }
+    }
     var scopesSheet = false
     /// The first-run setup was finished or skipped once.
     var onboardingCompleted = UserDefaults.standard.bool(forKey: OnboardingGate.completedKey)
@@ -178,19 +210,22 @@ final class AppModel {
     var onboardingInProgress = false
     /// Bumped by Reset Layout so the window's columns are built again.
     var layoutGeneration = 0
-    var myWork: MyWork?
-    var myWorkLoading = false
-    var myWorkError: String?
-    var myWorkFetched: Date?
-    var tracker: TrackerBacklog?
-    var trackerLoading = false
-    var trackerError: String?
-    var trackerFetched: Date?
+    /// `kb backlog duplicates` per scope: tracker items found for the proposals waiting to be created.
+    var duplicateChecked: [String: Date] { engine.backlog.checked }
+    var duplicateChecking: Set<String> { engine.backlog.checking }
+    var duplicateErrors: [String: String] { engine.backlog.errors }
+    /// Each tracker's sprints around today (`kb sprint status`), and what Mindmill remembers of them.
+    var sprintReport: SprintReport? { engine.sprints.report }
+    var sprintWatch: SprintWatch { engine.sprints.watch }
+    var sprintsChecking: Bool { engine.sprints.checking }
+    var sprintReviewRequest: SprintReviewRequest?
+    var sprintCreating: Set<String> = []
     var selectedWorkItem: Int?
     /// Mindmill's own tracker per scope, loaded when shown.
     var localTrackers: [String: LocalTracker] = [:]
     var selectedLocalItem: Int?
-    @ObservationIgnored var trackerKindCache: [String: String] = [:]
+    /// Folded sections' open or closed state for this run of the app, by key (`FoldMemory.swift`).
+    var foldStates: [String: Bool] = [:]
     /// A reminder or goal opened from the search results.
     var searchPick: SearchPick?
     var showProposedBacklog = false
@@ -212,32 +247,32 @@ final class AppModel {
     /// Signing Claude Code in again when a session's login fails.
     let claudeSignIn = ClaudeSignIn()
     /// Remote access for paired phones (Settings → Remote).
-    let remote = RemoteServer()
-    let testing = TestCenter()
-    let actions = ActionLayer()
+    var remote: RemoteServer { engine.remote }
+    let pusher = APNsPusher()
+    let testPlatform = MacTestPlatform()
+    var actions: ActionLayer { engine.actions }
     @ObservationIgnored lazy var actionServer = LocalActionServer(layer: actions)
-    var voiceConversations: [String: VoiceConversation] = [:]
+    var voiceConversations: [String: VoiceConversation] {
+        get { engine.voiceConversations }
+        set { engine.voiceConversations = newValue }
+    }
     let voiceMode = MacVoiceMode()
-    @ObservationIgnored var realtimeRelays: [String: RealtimeRelay] = [:]
-    /// `kb@kb` is installed in Claude Code; nil until checked.
+    var realtimeRelays: [String: RealtimeRelay] {
+        get { engine.realtimeRelays }
+        set { engine.realtimeRelays = newValue }
+    }
+    /// `mindmill@mindmill` is installed in Claude Code; nil until checked.
     var claudePluginInstalled: Bool?
     var installingClaudePlugin = false
     /// The brain and the model for each task (Settings → AI).
-    var aiSetup = AISetup.migrated(defaults: .standard) {
-        didSet { aiSetup.save(defaults: .standard) }
+    var aiSetup: AISetup {
+        get { engine.aiSetup }
+        set { engine.aiSetup = newValue }
     }
     /// Prompts sent from session and Ask fields, for ↑ and ↓.
     var promptHistory = PromptHistory(entries: UserDefaults.standard.stringArray(forKey: AppModel.promptHistoryKey) ?? [])
     /// Signing the Azure CLI in again when the Azure DevOps tools say its sign-in expired.
     let azureSignIn = AzureCLISignIn()
-    var pullRequests: PullRequestList?
-    var pullRequestsLoading = false
-    var pullRequestsError: String?
-    var pullRequestsFetched: Date?
-    /// When KB last queued each pull request's expired build again.
-    @ObservationIgnored var expiredBuildRetries: [Int: Date] = [:]
-    /// When each session last sent the overview session a message.
-    @ObservationIgnored var reportedToOverseer: [String: Date] = [:]
     var selectedPR: Int?
     /// `kb pr show` per pull request: its comment threads.
     var prDetails: [Int: PullRequest] = [:]
@@ -246,10 +281,6 @@ final class AppModel {
     var completePRRequest: CompletePRRequest?
     /// Ready PRs the user said "Not Now" to in a session, until KB restarts.
     var completeAsksDeclined: Set<Int> = []
-    /// When each Build session was first seen done; nil until it has been worked out once (see `DoneArchive`).
-    var sessionsDoneSince: [String: Date]? = (UserDefaults.standard.dictionary(forKey: AppModel.doneSinceKey) as? [String: Double])?
-        .mapValues(Date.init(timeIntervalSince1970:))
-    static let doneSinceKey = "sessionsDoneSince"
     var prCommentsRequest: PRCommentsRequest?
     var implementRequest: ImplementRequest?
     /// Completed pull requests that left a worktree or branch behind.
@@ -288,7 +319,6 @@ final class AppModel {
     @ObservationIgnored var trackerTimer: Timer?
     @ObservationIgnored var pullRequestTimer: Timer?
     var factChecker = ClaudeChat()
-    var followupChecker = ClaudeChat()
     var scopeTags = ScopeTagState()
     var scopeTagger = ClaudeChat()
     var tagWatch = TagWatchState()
@@ -299,29 +329,31 @@ final class AppModel {
     var itemTags = ItemTags()
     /// Follow-ups that may say the same thing, waiting for the user.
     var mergeProposals: [FollowupMergeProposal] = []
-    var findingDuplicates = false
+    var findingDuplicates: Bool {
+        get { engine.plan.findingDuplicates }
+        set { engine.plan.findingDuplicates = newValue }
+    }
     /// Claude's suggested links per fact id, until accepted or rejected; rejected ones aren't suggested again.
-    var factLinkSuggestions: [String: [FactLinkSuggestion]] = [:]
-    var factLinkRejected: [String: [String]] = [:]
-    var suggestingLinks: Set<EntryID> = []
+    var factLinkSuggestions: [String: [FactLinkSuggestion]] {
+        get { engine.plan.factLinkSuggestions }
+        set { engine.plan.factLinkSuggestions = newValue }
+    }
+    var factLinkRejected: [String: [String]] {
+        get { engine.plan.factLinkRejected }
+        set { engine.plan.factLinkRejected = newValue }
+    }
+    var suggestingLinks: Set<EntryID> {
+        get { engine.plan.suggestingLinks }
+        set { engine.plan.suggestingLinks = newValue }
+    }
     @ObservationIgnored var factGraphPending: Int?
     var factGraphCache: (key: Int, points: [String: FactGraph.Point])?
-    @ObservationIgnored var quizStatsCache: QuizStats?
-    @ObservationIgnored var crewTimer: Timer?
-    @ObservationIgnored var crewDirty = true
-    @ObservationIgnored var crewWritten = Date.distantPast
-    @ObservationIgnored var crewLastState: CrewState?
-    var sessions: [WorkSession] = []
     var selectedSessionID: String?
-    @ObservationIgnored var sessionsLoaded = false
     @ObservationIgnored var meetingControllers: [EntryID: MeetingController] = [:]
     @ObservationIgnored var openWindowAction: ((String, String?) -> Void)?
     @ObservationIgnored var openSettingsAction: (() -> Void)?
 
     @ObservationIgnored private var pendingNavigation: (() -> Void)?
-    @ObservationIgnored private var watcher: FileWatcher?
-    @ObservationIgnored private var teamWatchers: [FileWatcher] = []
-    @ObservationIgnored private var watchedTeamPaths: Set<String> = []
 
     init() {
         if let last = UserDefaults.standard.string(forKey: "appMode"),
@@ -329,17 +361,15 @@ final class AppModel {
             SplitViewMemory.swap(from: last, to: launch.rawValue)
             UserDefaults.standard.set(launch.rawValue, forKey: "appMode")
         }
-        let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "--root"), i + 1 < args.count {
-            rootPath = args[i + 1]
-            rootOverride = true
-        } else if let env = ProcessInfo.processInfo.environment["KB_ROOT"], !env.isEmpty {
-            rootPath = env
-            rootOverride = true
-        } else {
-            rootPath = KBConfig.loadRootPath()
-            rootOverride = false
-        }
+        let start = MindmillEngine.startRoot()
+        engine = MindmillEngine(rootPath: start.path, rootOverride: start.override, platform: MacPlatform.make())
+        engine.platform.presenter = self
+        engine.platform.actionEndpoint = actionServer
+        engine.myNames = { [weak self] in self?.myNames ?? [] }
+        engine.onTrackerChanged = { [weak self] in self?.refreshTracker(force: true) }
+        wireSessions()
+        engine.onReload.append { [weak self] loaded in self?.engineReloaded(loaded) }
+        engine.structureExtras = { [weak self] scope in self?.structureExtras(scope: scope) ?? StructureExtras() }
         AppAppearance.apply()
         reload()
         startWatching()
@@ -353,6 +383,28 @@ final class AppModel {
     }
 
     var rootURL: URL { KBConfig.rootURL(for: rootPath) }
+
+    // MARK: The tracker cache (the engine's)
+
+    var tracker: TrackerBacklog? {
+        get { engine.tracker.backlog }
+        set { engine.tracker.backlog = newValue }
+    }
+    var trackerLoading: Bool { engine.tracker.backlogLoading }
+    var trackerError: String? { engine.tracker.backlogError }
+    var trackerFetched: Date? { engine.tracker.backlogFetched }
+    var myWork: MyWork? { engine.tracker.myWork }
+    var myWorkLoading: Bool { engine.tracker.myWorkLoading }
+    var myWorkError: String? { engine.tracker.myWorkError }
+    var myWorkFetched: Date? { engine.tracker.myWorkFetched }
+    var pullRequests: PullRequestList? {
+        get { engine.tracker.pullRequests }
+        set { engine.tracker.pullRequests = newValue }
+    }
+    var pullRequestsLoading: Bool { engine.tracker.pullRequestsLoading }
+    var pullRequestsError: String? { engine.tracker.pullRequestsError }
+    var pullRequestsFetched: Date? { engine.tracker.pullRequestsFetched }
+
     var project: KBProject? { projectID.flatMap { index.project($0) } }
 
     var windowTitle: String {
@@ -383,30 +435,20 @@ final class AppModel {
     // MARK: Loading
 
     func reload() {
-        trackerKindCache = [:]
+        engine.reload()
+    }
+
+    /// What the app derives from the knowledge base, after every reload (the engine's, whoever asked for it).
+    private func engineReloaded(_ loaded: Bool) {
         for scope in localTrackers.keys {
             let fresh = LocalTracker.load(scope: scope, root: rootURL)
             if fresh != localTrackers[scope] { localTrackers[scope] = fresh }
         }
-        do {
-            index = try KBIndex.load(root: rootURL)
-            loadError = nil
+        if loaded {
             let tags = ItemTags.load(root: rootURL)
             if tags != itemTags { itemTags = tags }
             let merges = FollowupMergeProposal.load(root: rootURL, index: index)
             if merges != mergeProposals { mergeProposals = merges }
-            watchTeamFolders()
-        } catch let error as KBLoadError {
-            index = .empty
-            loadError = error
-        } catch {
-            index = .empty
-            loadError = .registryInvalid(error.localizedDescription)
-        }
-        if projectID == nil || index.project(projectID!) == nil {
-            let remembered = UserDefaults.standard.string(forKey: Self.lastProjectKey)
-            let fallback = remembered.flatMap { index.project($0) } ?? index.projects.first
-            projectID = fallback?.id
         }
         dailyPlan = DailyPlan.load(date: dailyDate, root: rootURL)
         loadTodayHidden()
@@ -414,14 +456,12 @@ final class AppModel {
         goals = Goals.load(root: rootURL)
         if let sel = selectedGoalID, !goals.contains(where: { $0.id == sel }) { selectedGoalID = nil }
         if let sel = selectedReminderID, !reminders.contains(where: { $0.id == sel }) { selectedReminderID = nil }
-        indexVersion += 1
         scheduleSharingRefresh()
-        strategies = StrategyStore.load(pluginRoot: URL(fileURLWithPath: KBConfig.expandTilde(pluginRootPath)), kbRoot: rootURL)
+        engine.sessions.reloadStrategies()
         factWatchIndexChanged()
         followupWatchIndexChanged()
         scopeWatchIndexChanged()
         tagWatchIndexChanged()
-        remoteIndexChanged()
         testScopesChanged()
         let existing = Set(index.entries.keys)
         inboxSelection = inboxSelection.intersection(existing)
@@ -432,33 +472,7 @@ final class AppModel {
 
     /// Watches the KB folder and every repo's `knowledgebase/` folder that exists.
     func startWatching() {
-        watcher?.stop()
-        watcher = nil
-        teamWatchers.forEach { $0.stop() }
-        teamWatchers = []
-        guard FileManager.default.fileExists(atPath: rootURL.path) else { return }
-        let w = FileWatcher(path: rootURL.path, debounce: 0.2) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reload() }
-        }
-        if w.start() { watcher = w }
-        watchTeamFolders()
-    }
-
-    /// Repos' team folders appear when the first team entry is written or a pull brings one; watch any new ones.
-    func watchTeamFolders() {
-        let layout = KBLayout.of(root: rootURL)
-        let dirs = layout.checkouts.keys.compactMap { layout.teamDir($0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        let paths = Set(dirs.map(\.path))
-        guard paths != watchedTeamPaths else { return }
-        teamWatchers.forEach { $0.stop() }
-        teamWatchers = paths.sorted().compactMap { path in
-            let w = FileWatcher(path: path, debounce: 0.2) { [weak self] _ in
-                MainActor.assumeIsolated { self?.reload() }
-            }
-            return w.start() ? w : nil
-        }
-        watchedTeamPaths = paths
+        engine.startWatching()
     }
 
     func changeRoot(to path: String) {
@@ -471,9 +485,7 @@ final class AppModel {
             return
         }
         navigate { [self] in
-            rootPath = trimmed
-            rootOverride = false
-            projectID = nil
+            try? engine.changeRoot(to: trimmed, save: false)
             closeDocument()
             reload()
             startWatching()
@@ -554,13 +566,14 @@ final class AppModel {
     /// `keepSearchScope` is for opening a result of an all-projects search, which should stay open.
     func setProject(_ id: String, keepSearchScope: Bool = false) {
         guard index.project(id) != nil, id != projectID else { return }
-        projectID = id
+        engine.scope = id
         multiSelection = []
         selectedWorkItem = nil
         showProposedBacklog = false
         showProposedFacts = false
             showLooseTasks = false
         UserDefaults.standard.set(id, forKey: Self.lastProjectKey)
+        rememberScope(id)
         testProjectOpened(id)
         if !keepSearchScope { searchAllProjects = false }
         closeDocument()

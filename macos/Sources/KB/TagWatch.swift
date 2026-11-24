@@ -1,5 +1,6 @@
 import Foundation
 import KBCore
+import KBEngine
 
 /// Which entries the background tagger has read, so it reads each new or changed one once.
 struct TagWatchState: Equatable {
@@ -15,7 +16,7 @@ extension AppModel {
     static let taggedSections: Set<KBSection> = [.meetings, .facts, .followups, .backlog, .decisions, .architecture]
 
     private var tagWatchURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KB/tagwatch.json")
+        AppPaths.file("tagwatch.json")
     }
 
     private func tagCandidates() -> [String: String] {

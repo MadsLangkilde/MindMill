@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension EntrySharing {

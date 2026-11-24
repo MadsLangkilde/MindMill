@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// What to show in the questions sheet: every open question, or those about one work item.
@@ -656,7 +657,7 @@ private struct FactoryQuestionCard: View {
                             Button { NSWorkspace.shared.open(url) } label: {
                                 Label("Open \(isBug(item, detail) ? "Bug" : "PBI")", systemImage: "arrow.up.forward.square")
                             }
-                            .help("Open the work item in Azure DevOps")
+                            .help("Open the work item in \(TrackerLink.name(forURL: url.absoluteString))")
                         }
                         if model.session(question.sessionID) != nil {
                             Button("Open Session") { model.buildSelection = question.sessionID }

@@ -1,5 +1,5 @@
 {
-  "name": "kb",
+  "name": "mindmill",
   "version": "0.1.0",
   "description": "A per-project knowledge base of decisions, meeting notes, facts and architecture, kept as Markdown in a git repo. Sessions load the project's index at start, brief you on what is relevant to a task, record decisions you make (superseding old ones), and file meeting notes. Comes with Mindmill, a macOS app for browsing and editing.",
   "author": { "name": "Mads Vejen Langkilde" },

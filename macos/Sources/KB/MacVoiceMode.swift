@@ -1,5 +1,6 @@
 import AVFoundation
 import KBCore
+import KBEngine
 import Observation
 
 /// Voice mode on the Mac: listen, send what was said to the voice brain, speak the reply sentence by sentence as

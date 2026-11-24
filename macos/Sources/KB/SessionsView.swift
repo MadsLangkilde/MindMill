@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct SessionsWindow: View {
@@ -51,9 +52,9 @@ struct SessionStartView: View {
 
     private let starts: [(title: String, icon: String, message: String?)] = [
         ("Blank session", "bubble.left.and.text.bubble.right", nil),
-        ("Create a PBI or bug", "plus.rectangle.on.rectangle", "/kb:create-pbi"),
-        ("Plan my day", "sun.max", "/kb:today"),
-        ("Brief me on the project", "doc.text.magnifyingglass", "/kb:brief"),
+        ("Create a PBI or bug", "plus.rectangle.on.rectangle", "/mindmill:create-pbi"),
+        ("Plan my day", "sun.max", "/mindmill:today"),
+        ("Brief me on the project", "doc.text.magnifyingglass", "/mindmill:brief"),
     ]
 
     var body: some View {
@@ -261,6 +262,10 @@ struct SessionView: View {
         if session.space == .build, let id = model.reviewedPR(session) {
             ReviewVoteMenu(prID: id, session: session)
         }
+        if let item = model.sessionWorkItem(session), let scope = session.project {
+            WorkItemHeaderButton(item: item, scope: scope)
+        }
+        if session.space == .build, session.role != .overseer, session.project != nil { TestHeaderButton(session: session) }
         if session.role != .overseer { StrategyButton(session: session) }
         if session.space == .plan { PlanArchiveButton(session: session) }
         if session.chat.isBusy {
@@ -277,10 +282,6 @@ struct SessionView: View {
             }
             if session.role == .solo || session.role == .member, !session.isResearchSession, !session.isAssistant {
                 Button("Move to Research in Plan") { model.moveToResearch(session) }
-            }
-            if session.space == .build {
-                TestSessionMenuItems(session: session)
-                Divider()
             }
             Button("Copy Conversation") {
                 NSPasteboard.general.clearContents()
@@ -377,13 +378,16 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity)
                 Color.clear.frame(height: 18).id("end")
             }
+            // Opens at the end, without scrolling down through the conversation.
+            .defaultScrollAnchor(.bottom)
             .modifier(EndTracker(atEnd: $atEnd))
             .onChange(of: atEnd) { _, now in if now { newBelow = false } }
-            .onChange(of: session.chat.items.count) { _, _ in
+            .onChange(of: session.chat.items.count) { old, new in
                 guard !finding else { return }
                 // Your own message always takes the view to the end.
                 if session.chat.items.last?.role == .user { atEnd = true }
-                follow(proxy)
+                // A conversation loading in (many items at once) jumps; one new message glides.
+                follow(proxy, animated: old > 0 && new - old <= 2)
             }
             .onChange(of: session.chat.items.last?.text.count) { _, _ in if !finding { follow(proxy, animated: false) } }
             .onChange(of: session.chat.isBusy) { _, _ in if !finding { follow(proxy) } }
@@ -396,7 +400,7 @@ struct SessionView: View {
                 guard let id else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
             }
-            .onAppear { scrollToEnd(proxy) }
+            .onAppear { scrollToEnd(proxy, animated: false) }
         }
     }
 
@@ -439,7 +443,7 @@ struct SessionView: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("What do you want to work on?").font(.title3.weight(.semibold))
-            Text("Describe the task, or type / to run a skill such as /kb:create-pbi. \(Brain.name) can read the knowledge base and the project's code, and asks before anything leaves this Mac.")
+            Text("Describe the task, or type / to run a skill such as /mindmill:create-pbi. \(Brain.name) can read the knowledge base and the project's code, and asks before anything leaves this Mac.")
                 .foregroundStyle(.secondary)
             if session.role == .solo, session.parentID == nil, session.strategy == nil, !model.strategies.isEmpty {
                 StartWayPicker(selection: $startStrategy)
@@ -618,8 +622,8 @@ struct SessionView: View {
         let all = session.chat.commands.isEmpty ? model.fallbackCommands(for: session) : session.chat.commands
         let matches = all.filter { q.isEmpty || $0.lowercased().contains(q) }
         let ranked = matches.sorted { a, b in
-            let ap = a.lowercased().hasPrefix(q) || a.lowercased().hasPrefix("kb:" + q)
-            let bp = b.lowercased().hasPrefix(q) || b.lowercased().hasPrefix("kb:" + q)
+            let ap = a.lowercased().hasPrefix(q) || a.lowercased().hasPrefix("mindmill:" + q)
+            let bp = b.lowercased().hasPrefix(q) || b.lowercased().hasPrefix("mindmill:" + q)
             return ap != bp ? ap : a < b
         }
         return Array(ranked.prefix(8))

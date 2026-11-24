@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// What is selected in the Today list: a meeting or other entry, a reminder, or a line of the plan.

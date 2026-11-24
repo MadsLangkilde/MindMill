@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 // MARK: Content column
@@ -17,7 +18,7 @@ struct ProjectColumn: View {
                     RepositoryRow(scope: scope)
                 }
                 Button { model.addProjectRequest = AddProjectRequest(project: group?.id) } label: {
-                    Label("Add Repositories…", systemImage: "plus")
+                    Label("Add Locations…", systemImage: "plus")
                 }
                 .buttonStyle(.borderless)
             } header: {
@@ -193,7 +194,7 @@ private struct ProjectHome: View {
                     }
                     .buttonStyle(.borderedProminent)
                     Button { model.addProjectRequest = AddProjectRequest(project: group?.id) } label: {
-                        Label("Add Repositories…", systemImage: "plus")
+                        Label("Add Locations…", systemImage: "plus")
                     }
                     Button { model.addProjectRequest = AddProjectRequest() } label: {
                         Label("New Project…", systemImage: "folder.badge.plus")
@@ -595,110 +596,6 @@ private struct FindingRow: View {
             }
         }
         .padding(.vertical, 4)
-    }
-}
-
-// MARK: Add a project
-
-struct AddProjectSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let request: AddProjectRequest
-    @State private var title = ""
-    @State private var repos: [Repo] = []
-    @State private var scanAfter = true
-
-    struct Repo: Identifiable {
-        var id: URL { url }
-        let url: URL
-        var title: String
-        let info: ScopeRepo
-        let isRepository: Bool
-    }
-
-    var body: some View {
-        let existing = request.project.flatMap { p in model.index.groups.first { $0.id == p } }
-        VStack(spacing: 0) {
-            Form {
-                if existing == nil {
-                    Section("Project") {
-                        TextField("Name", text: $title, prompt: Text("e.g. Acme App"))
-                    }
-                }
-                Section {
-                    ForEach($repos) { $r in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                TextField("Title", text: $r.title).textFieldStyle(.roundedBorder)
-                                Button { repos.removeAll { $0.id == r.id } } label: { Image(systemName: "minus.circle") }
-                                    .buttonStyle(.borderless)
-                                    .help("Leave this folder out")
-                            }
-                            Text(r.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                                .font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                            ChipRow(spacing: 6) {
-                                if !r.isRepository { Chip(text: "Not a git repository", color: .orange, systemImage: "exclamationmark.triangle") }
-                                if r.info.hasTeamFolder {
-                                    Chip(text: "knowledgebase/ found · \(r.info.teamEntries) entries", color: .green, systemImage: "checkmark.circle.fill")
-                                } else {
-                                    Chip(text: "No knowledgebase/ yet", color: .secondary, systemImage: "folder")
-                                }
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                    Button {
-                        add(model.chooseFolders(message: "Choose the project's repositories", multiple: true))
-                    } label: {
-                        Label(repos.isEmpty ? "Choose Folders…" : "Add More Folders…", systemImage: "folder.badge.plus")
-                    }
-                } header: {
-                    Text(existing.map { "Repositories to add to \($0.title)" } ?? "Repositories")
-                } footer: {
-                    Text("A repository's knowledgebase/ folder holds the team's decisions, facts and architecture; Mindmill shows them as soon as it's added.")
-                        .foregroundStyle(.secondary)
-                }
-                Section {
-                    Toggle("Scan them for knowledge next", isOn: $scanAfter)
-                } footer: {
-                    Text("Opens the scan form. You pick what to look for, and tick what goes into the knowledge base.").foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-            .multilineTextAlignment(.leading)
-            Divider()
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(existing == nil ? "Add Project" : "Add") { save(existing: existing) }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(repos.isEmpty || (existing == nil && title.trimmingCharacters(in: .whitespaces).isEmpty))
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-        }
-        .frame(minWidth: 460, idealWidth: 560, minHeight: 420, idealHeight: 560)
-    }
-
-    private func add(_ urls: [URL]) {
-        for url in urls where !repos.contains(where: { $0.url == url }) {
-            let name = url.lastPathComponent
-            repos.append(Repo(url: url, title: name.prefix(1).uppercased() + name.dropFirst(), info: ScopeRepo.of(paths: [url.path]),
-                              isRepository: ScopeRepo.isRepository(url)))
-        }
-        if title.isEmpty, request.project == nil, repos.count == 1 { title = repos[0].title }
-    }
-
-    private func save(existing: KBGroup?) {
-        let t = title.trimmingCharacters(in: .whitespaces)
-        let ids = model.addProject(title: existing == nil ? t : nil, into: existing?.id,
-                                   repos: repos.map { ($0.url, $0.title.trimmingCharacters(in: .whitespaces)) })
-        guard let first = ids.first else { return }
-        dismiss()
-        model.selectProject(first)
-        model.selectSidebar(.project)
-        model.projectPane = scanAfter ? .newScan(ids) : .home
     }
 }
 

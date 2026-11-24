@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension LocalTracker.Kind {
@@ -412,9 +413,7 @@ struct LocalItemEditor: View {
                 }
             }
             field("Tags") {
-                TextField("comma, separated", text: Binding(
-                    get: { draft?.tags.joined(separator: ", ") ?? "" },
-                    set: { v in draft?.tags = v.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }))
+                ListField(placeholder: "comma, separated", items: Binding(get: { draft?.tags ?? [] }, set: { draft?.tags = $0 }))
                     .textFieldStyle(.roundedBorder)
             }
         }

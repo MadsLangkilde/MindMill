@@ -1,85 +1,16 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
-    var quiz: QuizStats {
-        if let s = quizStatsCache { return s }
-        let s = QuizStats.load(root: rootURL)
-        quizStatsCache = s
-        return s
-    }
+    var quiz: QuizStats { engine.plan.quiz }
 
     func recordQuizAnswer(_ fact: String, correct: Bool) {
-        var s = quiz
-        s.record(fact, correct: correct, today: KBDate.today())
-        quizStatsCache = s
-        do { try s.save(root: rootURL) } catch { errorMessage = "Could not save the quiz results: \(error.localizedDescription)" }
+        do { try engine.plan.recordQuizAnswer(fact, correct: correct) } catch { errorMessage = "Could not save the quiz results: \(error.localizedDescription)" }
     }
 
-    private var quizQuestionsURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KB/quiz-questions.json")
-    }
-
-    /// Questions written before, by fact id, with the fact's signature then: a changed fact gets new questions.
-    private func cachedQuestions() -> [String: (sig: String, questions: [QuizQuestion])] {
-        struct Stored: Codable { var sig: String; var questions: [QuizQuestion] }
-        guard let data = try? Data(contentsOf: quizQuestionsURL),
-              let map = try? JSONDecoder().decode([String: Stored].self, from: data) else { return [:] }
-        return map.mapValues { ($0.sig, $0.questions) }
-    }
-
-    private func storeQuestions(_ map: [String: (sig: String, questions: [QuizQuestion])]) {
-        struct Stored: Codable { var sig: String; var questions: [QuizQuestion] }
-        guard let data = try? JSONEncoder().encode(map.mapValues { Stored(sig: $0.sig, questions: $0.questions) }) else { return }
-        try? FileManager.default.createDirectory(at: quizQuestionsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: quizQuestionsURL, options: .atomic)
-    }
-
-    /// One question per picked fact. Facts without questions yet get them from Claude in one go; they are kept for
-    /// later rounds until the fact changes.
-    func quizRound(from facts: [KBEntry], count: Int) async -> [QuizQuestion] {
-        let today = KBDate.today()
-        let picked = FactQuiz.pick(facts.map { .init(id: $0.id.rawValue, date: $0.date) }, stats: quiz, today: today,
-                                   count: count, seed: UInt64.random(in: 0...UInt64.max))
-        var cache = cachedQuestions()
-        let byID = Dictionary(facts.map { ($0.id.rawValue, $0) }, uniquingKeysWith: { a, _ in a })
-        let missing = picked.filter { id in
-            guard let e = byID[id] else { return false }
-            return cache[id]?.sig != Self.scopeSignature(e) || cache[id]?.questions.isEmpty != false
-        }
-        if !missing.isEmpty {
-            let blocks = missing.compactMap { id -> String? in
-                guard let e = byID[id] else { return nil }
-                let links = index.linkedFacts(of: e.id).map { "“\($0.title)”" }.joined(separator: ", ")
-                return """
-                ## \(id)
-                Title: \(e.title)
-                \(e.summary.isEmpty ? "" : "Summary: \(e.summary)\n")\(e.tags.isEmpty ? "" : "Tags: \(e.tags.joined(separator: ", "))\n")\(links.isEmpty ? "" : "Linked facts: \(links)\n")\(e.body.prefix(1200))
-                """
-            }.joined(separator: "\n\n")
-            let prompt = """
-            Write quiz questions that help me remember these facts from my own knowledge base. For each fact write 2 \
-            short questions with a short answer taken from the fact itself. Ask about what matters (who does what, \
-            which system, terms and what they mean, numbers, rules). When a fact has linked facts, one question may ask \
-            how they connect (for example "What validates the token issued by the BFF?"). Never ask about the title's \
-            wording itself.
-
-            \(blocks)
-
-            Reply with only a JSON array: [{"fact": "<the id after ##>", "question": "…", "answer": "…"}].
-            """
-            let reply = await claudeOnce(prompt, system: "You write short quiz questions from facts. Reply with JSON only.",
-                                         model: backgroundModel, timeout: 180)
-            let found = QuizQuestion.parse(reply ?? "", facts: Set(missing))
-            for id in missing {
-                guard let e = byID[id] else { continue }
-                let qs = found.filter { $0.fact == id }
-                if !qs.isEmpty { cache[id] = (Self.scopeSignature(e), qs) }
-            }
-            storeQuestions(cache)
-        }
-        return picked.compactMap { cache[$0]?.questions.randomElement() }
-    }
+    /// One question per picked fact; questions are written by Claude once per fact and kept until it changes.
+    func quizRound(from facts: [KBEntry], count: Int) async -> [QuizQuestion] { await engine.plan.quizRound(from: facts, count: count) }
 }
 
 /// Practise the facts: a question, the answer on request, and whether you knew it. Weak and new facts come up most.

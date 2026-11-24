@@ -1,6 +1,7 @@
 import ImageIO
 import AppKit
 import KBCore
+import KBEngine
 import Observation
 import SwiftUI
 
@@ -125,8 +126,7 @@ final class MeetingController {
     /// the app loses nothing. The Claude session itself resumes from `session_id` in the meeting file.
     private var chatURL: URL {
         let name = id.rawValue.replacingOccurrences(of: "/", with: "__")
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("KB/meeting-chats/\(name).json")
+        return AppPaths.file("meeting-chats/\(name).json")
     }
 
     private func restoreChat() {

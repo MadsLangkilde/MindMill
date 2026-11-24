@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// The focused text field's editor, for the caret and for typing into it at the caret.

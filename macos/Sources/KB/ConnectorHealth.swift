@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 
 /// What Claude can reach, from `claude mcp list`: checked at launch, when KB comes to the front and after a sync
 /// fails, so a connector that was signed out (say, by a password change) shows with what to do, and syncing starts

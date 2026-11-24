@@ -1,6 +1,6 @@
 ---
 name: research
-description: Research something with the user and keep what is found in the KB — alone, or for a PBI, idea or discussion — then finish it with a summary, takeaways for the PBI, and facts worth keeping. Use for "research X", "look into X for #1234", "find out whether…", and when the Mindmill app's Research buttons send `/kb:research <action> <id>`.
+description: Research something with the user and keep what is found in the KB — alone, or for a PBI, idea or discussion — then finish it with a summary, takeaways for the PBI, and facts worth keeping. Use for "research X", "look into X for #1234", "find out whether…", and when the Mindmill app's Research buttons send `/mindmill:research <action> <id>`.
 allowed-tools: Bash(kb:*), Read, Edit, Grep, Glob, WebSearch, WebFetch
 ---
 

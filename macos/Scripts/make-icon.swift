@@ -1,4 +1,4 @@
-// Draws the Mindmill app icon from the pixel-art logo and writes an .iconset folder for iconutil.
+// Draws the Mindmill app icon from the vector logo and writes an .iconset folder for iconutil.
 // Usage: make-icon <logo.png> <out.iconset>
 import AppKit
 
@@ -20,9 +20,8 @@ func draw(_ size: CGFloat) -> Data {
     let tile = NSRect(x: 100 * s, y: 100 * s, width: 824 * s, height: 824 * s)
     let path = NSBezierPath(roundedRect: tile, xRadius: 185 * s, yRadius: 185 * s)
     NSGradient(colors: [tileTop, tileBottom])!.draw(in: path, angle: -90)
-    // The logo is pixel art: keep hard pixel edges when scaling up, smooth only when shrinking.
     let side = 704 * s
-    ctx.imageInterpolation = side >= logo.size.width ? .none : .high
+    ctx.imageInterpolation = .high
     logo.draw(in: NSRect(x: (size - side) / 2, y: (size - side) / 2, width: side, height: side))
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!

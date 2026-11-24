@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
@@ -48,18 +49,13 @@ extension AppModel {
     }
 
     func deleteEntries(_ ids: Set<EntryID>) {
-        let cli = cli
         if let d = document, ids.contains(d.id) { closeDocument() }
         multiSelection = []
         busyEntries.formUnion(ids)
+        for id in ids where id.section == .meetings { closeMeetingController(id) }
         Task {
-            var failures: [String] = []
-            for id in ids {
-                if id.section == .meetings { closeMeetingController(id) }
-                do { try await cli.deleteEntry(id) } catch { failures.append(error.localizedDescription) }
-                busyEntries.remove(id)
-            }
-            reload()
+            let failures = await engine.deleteEntries(Array(ids))
+            busyEntries.subtract(ids)
             if failures.isEmpty { notice = "Deleted \(ids.count) entries." } else { errorMessage = failures.joined(separator: "\n\n") }
         }
     }

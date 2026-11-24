@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct NewResearchRequest: Identifiable {
@@ -10,11 +11,9 @@ struct NewResearchRequest: Identifiable {
 }
 
 extension AppModel {
-    static func researchKey(_ id: EntryID) -> String { "research:\(id.rawValue)" }
+    static func researchKey(_ id: EntryID) -> String { MindmillEngine.researchKey(id) }
 
-    func researchSession(_ id: EntryID) -> WorkSession? {
-        sessions.first { $0.about == Self.researchKey(id) }
-    }
+    func researchSession(_ id: EntryID) -> WorkSession? { engine.researchSession(id) }
 
     /// Research done for a PBI, idea or discussion, newest first.
     func research(for target: ResearchTarget) -> [KBEntry] {
@@ -69,22 +68,14 @@ extension AppModel {
         guard !title.isEmpty else { return }
         Task {
             guard let id = await createResearch(scope: request.project, title: title, question: question, target: request.target) else { return }
-            startResearchSession(id, message: "/kb:research start \(id.rawValue)", display: "Research: \(title)")
+            startResearchSession(id, message: "/mindmill:research start \(id.rawValue)", display: "Research: \(title)")
             openResearch(id)
         }
     }
 
     private func createResearch(scope: String, title: String, question: String, target: ResearchTarget?) async -> EntryID? {
-        var args = ["new", "research", "--scope", scope, "--title", title, "--body-stdin", "--cross-project"]
-        if let target { args += ["--field", "for=\(target.rawValue)"] }
         do {
-            let out = try await cli.run(args, stdin: ResearchBody.template(question: question))
-            guard let line = out.components(separatedBy: .newlines).first, let id = EntryID(line) else {
-                errorMessage = "kb new research didn't say what it made: \(out)"
-                return nil
-            }
-            reload()
-            return id
+            return try await engine.createResearch(scope: scope, title: title, question: question, target: target)
         } catch {
             errorMessage = error.localizedDescription
             return nil
@@ -93,25 +84,12 @@ extension AppModel {
 
     @discardableResult
     func startResearchSession(_ id: EntryID, message: String, display: String) -> WorkSession {
-        let title = index.entry(id)?.title ?? id.stem
-        return newSession(title: "Research: \(title)", project: id.project, message: message, display: display,
-                          about: Self.researchKey(id), show: false, space: .plan)
+        engine.startResearchSession(id, message: message, display: display)
     }
 
-    /// Sends a kb:research action to the research's session, starting one when it has none.
+    /// Sends a mindmill:research action to the research's session, starting one when it has none.
     func researchAction(_ action: String, _ id: EntryID, display: String) {
-        let message = "/kb:research \(action) \(id.rawValue)"
-        loadSessionsIfNeeded()
-        guard let s = researchSession(id) else {
-            startResearchSession(id, message: message, display: display)
-            return
-        }
-        if s.chat.isBusy {
-            s.inbox.append((text: message, display: display))
-            notice = "\(Brain.name) is busy; it does this when the current reply ends."
-        } else {
-            send(message, in: s, display: display)
-        }
+        if let said = engine.researchAction(action, id, display: display) { notice = said }
     }
 
     func setResearch(_ id: EntryID, status: ResearchStatus) {
@@ -199,7 +177,7 @@ extension AppModel {
             if buildSelection == s.id { buildSelection = nil }
             saveSessions()
             crewChanged()
-            let message = "/kb:research adopt \(id.rawValue)"
+            let message = "/mindmill:research adopt \(id.rawValue)"
             let display = "Moved to Research: write down what we have found so far"
             if s.chat.isBusy { s.inbox.append((text: message, display: display)) } else { send(message, in: s, display: display) }
             openResearch(id)
@@ -224,8 +202,14 @@ extension AppModel {
 struct ResearchListView: View {
     @Environment(AppModel.self) private var model
     let project: KBProject
-    @State private var showDone = false
-    @State private var showParked = false
+    private var showDone: Bool {
+        get { model.foldStates["research.done"] ?? false }
+        nonmutating set { model.foldStates["research.done"] = newValue }
+    }
+    private var showParked: Bool {
+        get { model.foldStates["research.parked"] ?? false }
+        nonmutating set { model.foldStates["research.parked"] = newValue }
+    }
 
     var body: some View {
         let every = model.index.entries(project: project.id, section: .research).filter { !$0.isDraft }
@@ -593,11 +577,9 @@ struct ResearchFinishView: View {
 
     @ViewBuilder
     private func proposalsSection(_ proposals: [KBEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Proposed for the knowledge base").font(.headline)
-                Text("\(proposals.filter { !unticked.contains($0.id) }.count) of \(proposals.count) kept").foregroundStyle(.secondary)
-            }
+        FoldBlock(key: "research.proposals.\(entry.id.rawValue)", title: "Proposed for the knowledge base") {
+            Text("\(proposals.filter { !unticked.contains($0.id) }.count) of \(proposals.count) kept").foregroundStyle(.secondary)
+        } content: {
             if proposals.isEmpty {
                 Text("\(Brain.name) proposed no facts.").foregroundStyle(.secondary)
             }

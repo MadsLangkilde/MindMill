@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -16,16 +17,10 @@ extension AppModel {
     func saveReference(project: String, title: String, kind: ReferenceKind, url: URL?, note: String, content: String,
                        fields: [String: String] = [:]) -> EntryID? {
         do {
-            var doc = try KBStore.newDocument(project: project, section: .references, title: title, root: rootURL)
-            doc.frontmatter.setString("kind", kind.rawValue)
-            if let url { doc.frontmatter.setString("url", url.absoluteString) }
-            doc.frontmatter.setString("captured", KBDate.today())
-            for (k, v) in fields.sorted(by: { $0.key < $1.key }) { doc.frontmatter.setString(k, v) }
-            doc.body = ReferenceBody.make(note: note, content: content)
-            try KBStore.save(&doc, root: rootURL)
-            reload()
+            let id = try engine.saveReference(project: project, title: title, kind: kind, url: url, note: note, content: content,
+                                              fields: fields)
             notice = "Saved “\(title)” to References."
-            return doc.id
+            return id
         } catch {
             errorMessage = "Could not save the reference: \(error.localizedDescription)"
             return nil
@@ -48,13 +43,7 @@ extension AppModel {
     }
 
     func referenceFromMail(project: String, kind: ReferenceKind, lookFor: String, note: String) {
-        let q = lookFor.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return }
-        let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        let action = kind == .teams ? "teams" : "email"
-        newSession(title: "Save \(kind.title.lowercased())", project: project,
-                   message: "/kb:reference \(action) \(project) \(q)" + (n.isEmpty ? "" : "\n\nWhy it matters: \(n)"),
-                   display: "Save \(kind == .teams ? "a Teams chat" : "an email") to References: \(q)")
+        engine.referenceFromMail(project: project, kind: kind, lookFor: lookFor, note: note)
     }
 
     func chooseReferenceFiles(project: String) {

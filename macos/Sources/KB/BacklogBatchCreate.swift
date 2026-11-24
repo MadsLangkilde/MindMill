@@ -1,7 +1,8 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
-/// Proposed PBIs and bugs to create in Azure DevOps together, after a meeting or from the backlog.
+/// Proposed PBIs and bugs to create in the tracker together, after a meeting or from the backlog.
 struct BacklogBatchRequest: Identifiable, Equatable {
     let id = UUID()
     let entries: [EntryID]
@@ -11,8 +12,9 @@ struct BacklogBatchRequest: Identifiable, Equatable {
     var people: [String] = []
 }
 
-/// One sheet for creating work items: each item with its sprint, assignee and parent, then Create or Not Now.
-/// Not Now leaves them under the backlog's "Waiting to be created".
+/// One sheet for creating work items: each item with its sprint, assignee, parent and related items, then Create or
+/// Not Now. A possible duplicate keeps its item from being created until the user drops it or says it isn't one.
+/// Not Now leaves them under the backlog's "Suggested backlog items".
 struct BacklogBatchCreateSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -27,6 +29,8 @@ struct BacklogBatchCreateSheet: View {
         /// Empty: unassigned.
         var assignee: String
         var parent: String
+        /// Work item numbers and backlog entry ids.
+        var related: [String]
         var result: Result?
     }
 
@@ -50,21 +54,26 @@ struct BacklogBatchCreateSheet: View {
             Divider()
             ScrollView {
                 VStack(spacing: 12) {
+                    let findings = model.duplicateFindings(for: items.compactMap { model.index.entry($0.id) })
                     ForEach($items) { $item in
-                        ItemCard(item: $item, people: request.people, me: model.tracker?.me ?? "",
-                                 sprintNames: sprintNames, prefix: prefix(item.id), locked: running || item.isDone)
+                        let duplicate = item.isDone ? nil : findings[item.id].flatMap { $0.verdict == .none ? nil : $0 }
+                        ItemCard(item: $item, single: items.count == 1, people: request.people, me: model.tracker?.me ?? "",
+                                 sprintNames: sprintNames, prefix: prefix(item.id), locked: running || item.isDone,
+                                 siblings: items.filter { $0.id != item.id }.map { ($0.id.rawValue, $0.title) },
+                                 parentHint: model.index.entry(item.id).flatMap { model.inferredParent($0) },
+                                 duplicate: duplicate)
                     }
                 }
                 .padding(18)
             }
-            .frame(minHeight: 240, idealHeight: CGFloat(min(items.count, 3)) * 190 + 40, maxHeight: 620)
+            .frame(minHeight: 240, idealHeight: CGFloat(min(items.count, 3)) * 230 + 40, maxHeight: 620)
             Divider()
             HStack {
                 if allDone {
-                    Text(created == items.count ? "Created." : "\(created) created. The rest wait under Backlog → Waiting to be created.")
+                    Text(created == items.count ? "Created." : "\(created) created. The rest wait under Backlog → Suggested backlog items.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
-                    Text("Not Now keeps them under Backlog → Waiting to be created.")
+                    Text("Not Now keeps them under Backlog → Suggested backlog items.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -84,24 +93,38 @@ struct BacklogBatchCreateSheet: View {
         }
         .frame(width: 620)
         .onAppear(perform: load)
+        .task {
+            for scope in Set(request.entries.map(\.project)) { model.checkDuplicates(scope: scope) }
+        }
     }
 
+    static func createLabel(_ kind: String) -> String { "Create in " + TrackerLink.name(kind) }
+
     private var subtitle: String {
-        var s = "Pick the sprint and who it goes to. Untick what shouldn't be created yet."
+        var s = items.count == 1 ? "Pick the sprint and who it goes to." : "Pick the sprint and who it goes to. Untick what shouldn't be created yet."
         if let c = request.context { s = "From \(c). " + s }
         if !trackerReady { s += " The tracker settings are missing the organization or project." }
         return s
     }
 
-    private var toCreate: [Item] { items.filter { $0.include && !$0.isDone } }
+    private var toCreate: [Item] {
+        items.filter {
+            $0.include && !$0.isDone && model.index.entry($0.id)?.backlogStatus == .proposed && model.unresolvedDuplicate($0.id) == nil
+        }
+    }
     private var created: Int { items.filter(\.isDone).count }
     private var allDone: Bool { !items.isEmpty && !running && items.allSatisfy { $0.isDone || $0.isFailed || !$0.include } && items.contains { $0.result != nil } }
-    private var createTitle: String { toCreate.count == 1 ? "Create in Azure DevOps" : "Create \(toCreate.count) in Azure DevOps" }
+    private var createTitle: String {
+        let kinds = Set(items.map { model.settings(for: $0.id.project).tracker.kind })
+        let label = Self.createLabel(kinds.count == 1 ? kinds.first! : "azure-devops")
+        if kinds.count > 1 { return toCreate.count == 1 ? "Create It" : "Create \(toCreate.count)" }
+        return toCreate.count <= 1 ? label : label.replacingOccurrences(of: "Create", with: "Create \(toCreate.count)")
+    }
 
     private var trackerReady: Bool {
         Set(items.map(\.id.project)).allSatisfy { p in
             let t = model.settings(for: p).tracker
-            return t.kind == "azure-devops" && !t.organization.isEmpty && !t.project.isEmpty
+            return t.kind == "local" || (t.kind == "azure-devops" && !t.organization.isEmpty && !t.project.isEmpty)
         }
     }
 
@@ -120,10 +143,13 @@ struct BacklogBatchCreateSheet: View {
             guard let e = model.index.entry(id), e.backlogStatus == .proposed else { return nil }
             let t = model.settings(for: id.project).tracker
             let assignee = e.field("assignee") ?? t.assignee
-            return Item(id: id, title: e.title, kind: e.backlogKind ?? "pbi",
+            let parent = WorkItemLinks.parentNumber(e.field("parent")).map(String.init)
+                ?? model.inferredParent(e).map { String($0.number) }
+                ?? (e.field("parent") == nil ? t.defaultParent : "")
+            return Item(id: id, title: e.title, kind: e.backlogKind,
                         sprint: e.field("sprint").flatMap(Sprint.init(rawValue:)) ?? .current,
                         assignee: assignee == "none" ? "" : assignee,
-                        parent: e.field("parent") ?? t.defaultParent)
+                        parent: parent, related: WorkItemLinks.relatedValues(e.listField("related")))
         }
     }
 
@@ -144,11 +170,12 @@ struct BacklogBatchCreateSheet: View {
                         doc.frontmatter.set("sprint", .string(item.sprint.rawValue))
                         let who = item.assignee.trimmingCharacters(in: .whitespaces)
                         doc.frontmatter.set("assignee", .string(who.isEmpty ? "none" : who))
-                        let parent = item.parent.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-                        doc.frontmatter.set("parent", .string(parent.isEmpty ? "none" : parent))
+                        doc.frontmatter.set("parent", .string(item.parentNumber.isEmpty ? "none" : item.parentNumber))
+                        let related = WorkItemLinks.relatedValues(item.related)
+                        doc.frontmatter.set("related", related.isEmpty ? nil : .list(related))
                     }
                     if doc.isDirty { _ = try KBStore.save(&doc, root: root) }
-                    let made = try await cli.createBacklog(item.id, sprint: item.sprint)
+                    let made = try await cli.createBacklog(item.id, sprint: item.sprint, parent: item.parentNumber)
                     items[i].result = .created(made?.id ?? "", made?.url ?? "")
                 } catch {
                     items[i].result = .failed(error.localizedDescription)
@@ -157,21 +184,42 @@ struct BacklogBatchCreateSheet: View {
             running = false
             model.reload()
             model.refreshTracker(force: true)
+            let made = items.filter(\.isDone)
+            if !made.isEmpty, !items.contains(where: { $0.include && !$0.isDone }) {
+                let numbers = made.compactMap { if case .created(let id, _) = $0.result, !id.isEmpty { return "#" + id } else { return nil } }
+                model.notice = made.count == 1 ? "Created \(numbers.first ?? "the work item")." : "Created \(numbers.joined(separator: ", "))."
+                dismiss()
+            }
         }
     }
 
     private struct ItemCard: View {
+        @Environment(AppModel.self) private var model
         @Binding var item: Item
+        /// The only item in the sheet: nothing to untick.
+        let single: Bool
         let people: [String]
         let me: String
         let sprintNames: [Sprint: String]
         let prefix: String
         let locked: Bool
+        /// The other items in this sheet, as (entry id, title).
+        let siblings: [(String, String)]
+        let parentHint: (number: Int, from: String)?
+        let duplicate: DuplicateFinding?
+        /// Titles of the work items shown as parent or related, as the tracker search found them.
+        @State private var titles: [Int: String] = [:]
 
         var body: some View {
             VStack(alignment: .leading, spacing: 10) {
+                if let duplicate, let entry = model.index.entry(item.id) {
+                    DuplicateBox(entry: entry, finding: duplicate)
+                }
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Toggle("", isOn: $item.include).labelsHidden().disabled(locked)
+                    if !single {
+                        Toggle("", isOn: $item.include).labelsHidden().disabled(locked || duplicate != nil)
+                            .help("Untick to leave it out of this batch")
+                    }
                     Text(item.kind == "bug" ? "Bug" : "PBI")
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
@@ -196,9 +244,33 @@ struct BacklogBatchCreateSheet: View {
                         Text("Assignee").foregroundStyle(.secondary)
                         AssigneePicker(name: $item.assignee, me: me, people: people)
                     }
-                    GridRow {
+                    GridRow(alignment: .top) {
                         Text("Parent").foregroundStyle(.secondary)
-                        TextField("work item number, optional", text: $item.parent).frame(width: 200)
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let number = Int(item.parentNumber) {
+                                LinkedItemChip(label: label(String(number)), help: "No parent") { item.parent = "" }
+                            } else {
+                                WorkItemSearchField(scope: item.id.project, prompt: "Search by id or title, optional") { found in
+                                    titles[found.id] = found.title
+                                    item.parent = String(found.id)
+                                }
+                            }
+                            if let hint = parentHint, String(hint.number) != item.parentNumber {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                    Text("\(hint.from.prefix(1).uppercased() + hint.from.dropFirst()) names #\(hint.number) as the parent.")
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Button("Use #\(hint.number)") { item.parent = String(hint.number) }.buttonStyle(.link)
+                                }
+                                .font(.caption)
+                            } else if let hint = parentHint, String(hint.number) == item.parentNumber {
+                                Text("Read from \(hint.from).").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    GridRow(alignment: .top) {
+                        Text("Related").foregroundStyle(.secondary)
+                        relatedEditor
                     }
                 }
                 .font(.callout)
@@ -210,6 +282,49 @@ struct BacklogBatchCreateSheet: View {
             .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
         }
 
+        private var relatedEditor: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                if !item.related.isEmpty {
+                    ChipRow(spacing: 4) {
+                        ForEach(item.related, id: \.self) { r in
+                            LinkedItemChip(label: label(r), help: "Don't link it") { item.related.removeAll { $0 == r } }
+                        }
+                    }
+                }
+                HStack(alignment: .top, spacing: 6) {
+                    WorkItemSearchField(scope: item.id.project, exclude: Set(item.related.compactMap(Int.init))) { found in
+                        titles[found.id] = found.title
+                        if !item.related.contains(String(found.id)) { item.related.append(String(found.id)) }
+                    }
+                    let others = siblings.filter { !item.related.contains($0.0) }
+                    if !others.isEmpty {
+                        Menu("This Batch") {
+                            ForEach(others, id: \.0) { s in Button(s.1) { item.related.append(s.0) } }
+                        }
+                        .fixedSize()
+                        .help("Link it with another item created here, e.g. the other platform's")
+                    }
+                }
+            }
+            .task(id: item.related.joined(separator: ",") + "|" + item.parentNumber) { await loadTitles() }
+        }
+
+        private func label(_ r: String) -> String {
+            if let n = Int(r) { return titles[n].map { "#\(n) \(AppModel.shortTitle($0))" } ?? "#\(n)" }
+            if let s = siblings.first(where: { $0.0 == r }) { return AppModel.shortTitle(s.1) }
+            return AppModel.shortTitle(EntryID(r).flatMap { model.index.entry($0) }?.title ?? r)
+        }
+
+        /// Looks up the titles of numbers that came with the entry, so they show as "#123 Title".
+        private func loadTitles() async {
+            let numbers = (item.related + [item.parentNumber]).compactMap(Int.init).filter { titles[$0] == nil }
+            for n in numbers {
+                guard let found = try? await model.cli.trackerFind(String(n), scope: item.id.project, limit: 1),
+                      let hit = found.first(where: { $0.id == n }) else { continue }
+                titles[n] = hit.title
+            }
+        }
+
         @ViewBuilder
         private func status(_ r: Result) -> some View {
             switch r {
@@ -218,7 +333,11 @@ struct BacklogBatchCreateSheet: View {
             case .created(let id, let url):
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    if let link = URL(string: url), !id.isEmpty { Link("Created #\(id)", destination: link) } else { Text("Created") }
+                    if url.hasPrefix("http"), let link = URL(string: url), !id.isEmpty {
+                        Link("Created #\(id)", destination: link)
+                    } else {
+                        Text(id.isEmpty ? "Created" : "Created #\(id)")
+                    }
                 }
                 .font(.callout)
             case .failed(let message):
@@ -231,6 +350,8 @@ struct BacklogBatchCreateSheet: View {
 }
 
 extension BacklogBatchCreateSheet.Item {
+    /// The parent as the CLI takes it: digits, or empty for none.
+    var parentNumber: String { parent.filter(\.isNumber) }
     var isDone: Bool { if case .created = result { return true } else { return false } }
     var isFailed: Bool { if case .failed = result { return true } else { return false } }
 }
@@ -281,5 +402,24 @@ struct AssigneePicker: View {
             }
             .padding(12)
         }
+    }
+}
+
+/// A linked work item or entry with a remove button.
+struct LinkedItemChip: View {
+    let label: String
+    let help: String
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(label).lineLimit(1)
+            Button(action: remove) { Image(systemName: "xmark.circle.fill") }
+                .buttonStyle(.plain)
+                .help(help)
+        }
+        .font(.caption)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(Color.teal.opacity(0.14), in: Capsule())
     }
 }

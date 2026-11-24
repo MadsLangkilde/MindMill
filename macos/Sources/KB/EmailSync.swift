@@ -1,61 +1,10 @@
 import KBCore
+import KBEngine
 import SwiftUI
-
-struct EmailSyncState: Equatable {
-    var lastRun: Date?
-    var summary: String?
-    var error: String?
-    var inFlight = false
-}
 
 extension AppModel {
     /// Has Claude read new mail and propose reminders for what needs the user, skipping newsletters and noise.
-    func syncEmail() {
-        guard !email.isRunning, !morning.isBusy else { return }
-        guard let launch = launch(prompt: ClaudeModes.email, sessionID: UUID().uuidString.lowercased(), resume: false,
-                                  model: defaultModel, cwd: rootURL,
-                                  tools: ["Bash(kb:*)", "Read", "Edit", "mcp__claude_ai_Microsoft_365__outlook_email_search",
-                                          "mcp__claude_ai_Microsoft_365__read_resource"]) else {
-            errorMessage = claudeMissingExplanation
-            return
-        }
-        email.onEvent = { [weak self] event in self?.emailEvent(event) }
-        do {
-            try email.start(launch, mode: "email")
-        } catch {
-            emailSync.error = error.localizedDescription
-            return
-        }
-        emailSync.lastRun = Date()
-        emailSync.inFlight = true
-        email.send(ClaudeModes.warmup, tag: "connect", show: false)
-        email.send("scan", tag: "email", show: false)
-    }
-
-    private func emailEvent(_ event: ClaudeEvent) {
-        switch event {
-        case .turnResult(let text, let isError, let tag) where tag == "email":
-            emailSync.inFlight = false
-            let line = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
-            if !isError, line.hasPrefix("EMAIL") {
-                emailSync.summary = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-                emailSync.error = nil
-                notice = "Email: \(emailSync.summary ?? "")"
-            } else {
-                emailSync.error = line.hasPrefix("ERROR") ? String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces) : (line.isEmpty ? "Email scan failed." : line)
-                if ConnectorSignIn.isNeeded(text) { microsoft365Status = "needs-auth" }
-                checkConnectors(force: true)
-            }
-            email.stop()
-            reload()
-        case .exited:
-            guard emailSync.inFlight else { return }
-            emailSync.inFlight = false
-            emailSync.error = "\(Brain.name) stopped before the email scan finished."
-        default:
-            break
-        }
-    }
+    func syncEmail() { engine.routines.syncEmail() }
 }
 
 struct EmailSyncButton: View {

@@ -1,6 +1,6 @@
 ---
 name: discussion
-description: Track an open discussion (an email thread, a Teams chat, a debate across meetings) in the KB until it settles, and file what it produces as facts, decisions, follow-ups or backlog items. Use for "start a discussion from this mail", "what's the state of the X discussion", "check for new replies", "file the findings", "conclude it", and when the Mindmill app's Discussions buttons send `/kb:discussion <action> …`.
+description: Track an open discussion (an email thread, a Teams chat, a debate across meetings) in the KB until it settles, and file what it produces as facts, decisions, follow-ups or backlog items. Use for "start a discussion from this mail", "what's the state of the X discussion", "check for new replies", "file the findings", "conclude it", and when the Mindmill app's Discussions buttons send `/mindmill:discussion <action> …`.
 allowed-tools: Bash(kb:*), Read, Edit, mcp__claude_ai_Microsoft_365__outlook_email_search, mcp__claude_ai_Microsoft_365__chat_message_search, mcp__claude_ai_Microsoft_365__teams_list_chats, mcp__claude_ai_Microsoft_365__read_resource
 ---
 
@@ -63,7 +63,8 @@ user approves each in the Inbox:
 - a stable truth about the product, an API or a person's role: `--section facts`
 - something agreed that changes how the team works or builds: `--section decisions`
 - something someone must do or answer: `--section followups`
-- work for the backlog: `--section backlog`
+- work for the backlog: `--section backlog` (with `--field parent=<n>` when a parent work item is named, and
+  `related` for items proposed together, as in the mindmill:work-item skill)
 
 ```sh
 kb inbox add --scope <scope> --section facts --proposed-by <id> --source <id> --title "…" --summary "…" \

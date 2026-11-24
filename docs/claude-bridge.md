@@ -57,12 +57,12 @@ The `init` line carries `mcp_servers` with each server's `status`. When `claude.
 ## Mode prompts (`--append-system-prompt`)
 
 **Prepare** (`prepare <meeting id>`):
-> You are preparing the meeting `<id>` with the user, using the kb:meeting skill's Prepare phase.
+> You are preparing the meeting `<id>` with the user, using the mindmill:meeting skill's Prepare phase.
 > The meeting file exists with `status: prepared`. Keep `## Prep` and `## Questions` in that file up to
 > date using the Edit tool. Reply in chat in at most 5 lines; the file is the deliverable.
 
 **Live** (`live <meeting id>`):
-> The user is in the meeting `<id>`, typing notes. Each message is a new note. Follow the kb:meeting skill's
+> The user is in the meeting `<id>`, typing notes. Each message is a new note. Follow the mindmill:meeting skill's
 > Capture phase. Reply with exactly `OK` when there is nothing worth saying. Otherwise reply with at
 > most two lines, each starting with `⚠` (conflicts with a decision or the code) or `ℹ` (already decided,
 > or open since an earlier meeting), citing entry ids. When a note answers one of the meeting's
@@ -70,23 +70,23 @@ The `init` line carries `mcp_servers` with each server's `status`. When `claude.
 > the live phase.
 
 **Review** (sent as a user message when the user presses Done, in the same live session):
-> The meeting is over. Run the kb:meeting skill's Summarize phase with the raw notes in the meeting file.
+> The meeting is over. Run the mindmill:meeting skill's Summarize phase with the raw notes in the meeting file.
 > Write `## Summary` into the meeting file and set `status: review`. Do not ask for approval in chat.
 > Write every proposed decision, fact and follow-up as an inbox entry (`kb inbox add …`) with
 > `proposed_by: <meeting id>`, and every proposed PBI or bug as a backlog entry with
 > `source: [<meeting id>]`. Then reply with one line: `PROPOSED <n>`.
 
 **Calendar** (`sync`, model `haiku`, tools `Bash(kb:*)` and `outlook_calendar_search` only): run the
-`kb:calendar` skill for today and tomorrow and reply with the importer's summary line or `ERROR <reason>`.
+`mindmill:calendar` skill for today and tomorrow and reply with the importer's summary line or `ERROR <reason>`.
 The app runs it at launch, every 30 minutes (a setting), when the Mac wakes and from the Today header,
 and runs the morning routine right after it when today has no plan yet.
 
 **Email** (`scan`, the default model, tools `Bash(kb:*)`, `outlook_email_search`, `read_resource`): run the
-`kb:email` skill and reply `EMAIL <n> proposed, <m> skipped` or `ERROR <reason>`. From the envelope button in
+`mindmill:email` skill and reply `EMAIL <n> proposed, <m> skipped` or `ERROR <reason>`. From the envelope button in
 Today and Reminders; the morning routine scans email itself.
 
 **Morning** (`today`):
-> Run the kb:today skill for <date>. Write `daily/<date>.md`, prepare meetings as files, and put proposals
+> Run the mindmill:today skill for <date>. Write `daily/<date>.md`, prepare meetings as files, and put proposals
 > in the inbox and the backlog. Reply with at most 5 lines.
 
 **Session window** (`session`): the user's own task, often a skill. The prompt says it runs in the app,

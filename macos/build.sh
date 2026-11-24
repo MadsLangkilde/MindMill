@@ -20,7 +20,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Mindmill"
 
 ICON=build/AppIcon.icns
-LOGO=../art/mindmill-logo.png
+LOGO=../art/mindmill-logo.svg
 if [ ! -f "$ICON" ] || [ Scripts/make-icon.swift -nt "$ICON" ] || [ "$LOGO" -nt "$ICON" ]; then
   swiftc -O -o build/make-icon Scripts/make-icon.swift
   rm -rf build/AppIcon.iconset

@@ -1,9 +1,9 @@
 {
-  "name": "kb",
+  "name": "mindmill",
   "owner": { "name": "Mads Vejen Langkilde" },
   "plugins": [
     {
-      "name": "kb",
+      "name": "mindmill",
       "source": "./",
       "description": "Per-project knowledge base: decisions, meetings, facts and architecture, with task briefs, decision tracking, a meeting companion and the Mindmill macOS app."
     }

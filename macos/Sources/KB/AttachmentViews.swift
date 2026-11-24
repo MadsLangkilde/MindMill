@@ -1,12 +1,13 @@
 import AppKit
 import ImageIO
 import KBCore
+import KBEngine
 import SwiftUI
 import UniformTypeIdentifiers
 
 extension AppModel {
     var appDataURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KB")
+        AppPaths.data
     }
 
     /// Adds files to the session's input box, skipping ones already there.

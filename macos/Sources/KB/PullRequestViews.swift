@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct CompletePRRequest: Identifiable, Equatable {
@@ -13,62 +14,10 @@ struct PRCommentsRequest: Identifiable, Equatable {
 }
 
 extension AppModel {
-    func refreshPullRequests(force: Bool = false) {
-        startPullRequestTimer()
-        guard !pullRequestsLoading else { return }
-        if !force, let at = pullRequestsFetched, Date().timeIntervalSince(at) < 120 { return }
-        pullRequestsLoading = true
-        let cli = cli
-        Task {
-            do {
-                let before = Set(pullRequests?.prs.map(\.id) ?? [])
-                pullRequests = try PullRequestList.decode(try await cli.run(["pr", "list", "--json"]))
-                // One left the open list: it may have been merged, so look for what it left behind.
-                if PRAutoCleanup.isOn, !before.subtracting(pullRequests?.prs.map(\.id) ?? []).isEmpty {
-                    refreshDonePRs(force: true)
-                }
-                pullRequestsError = nil
-                pullRequestsFetched = Date()
-                groupSessionsByWork()
-                reportStuckPRs()
-                askFinishedSessions()
-                retryExpiredBuilds()
-            } catch {
-                pullRequestsError = error.localizedDescription
-            }
-            pullRequestsLoading = false
-        }
-    }
-
-    /// Runs an expired build again, as Azure DevOps's "Re-queue" does: at most once every 15 minutes per pull
-    /// request, so a build that keeps expiring isn't requeued in a loop.
-    func retryExpiredBuilds() {
-        let now = Date()
-        let due = (pullRequests?.prs ?? []).filter { pr in
-            pr.buildExpired && !pr.draft && expiredBuildRetries[pr.id].map { now.timeIntervalSince($0) > 900 } ?? true
-        }
-        guard !due.isEmpty else { return }
-        for pr in due { expiredBuildRetries[pr.id] = now }
-        let cli = cli
-        Task {
-            var done: [Int] = []
-            for pr in due {
-                do {
-                    _ = try await cli.run(["pr", "checks", String(pr.id), "--requeue-expired", "--log-lines", "0"])
-                    done.append(pr.id)
-                } catch {
-                    notice = "Could not run the expired build of !\(pr.id) again: \(error.localizedDescription)"
-                }
-            }
-            guard !done.isEmpty else { return }
-            notice = "The build of " + done.map { "!\($0)" }.joined(separator: ", ") + " had expired. Mindmill queued it again."
-            try? await Task.sleep(for: .seconds(15))
-            refreshPullRequests(force: true)
-        }
-    }
+    func refreshPullRequests(force: Bool = false) { engine.tracker.refreshPullRequests(force: force) }
 
     /// Every three minutes while Build is in front, so merged PRs and finished builds show without Sync.
-    private func startPullRequestTimer() {
+    func startPullRequestTimer() {
         guard pullRequestTimer == nil else { return }
         pullRequestTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -160,19 +109,10 @@ extension AppModel {
     /// Hands the PR's open comments to Claude: in `session` when given, else in the session already on this PR,
     /// else in a new Build session.
     func handlePRComments(_ pr: PullRequest, mode: PRCommentsMode, in session: WorkSession? = nil) {
-        if let s = session ?? sessions(forKey: pr.sessionKey).first ?? sessionsLinked(to: pr).first {
-            send(mode.prompt(pr), in: s, display: mode.display(pr))
-            openSession(s)
-            return
-        }
-        newSession(title: "!\(pr.id) comments: \(pr.title)", project: pr.scope.isEmpty ? nil : pr.scope, message: mode.prompt(pr),
-                   display: mode.display(pr), about: pr.sessionKey, space: .build)
+        engine.sessions.handlePRComments(pr, mode: mode, in: session)
     }
 
-    /// Build sessions whose work leads to this PR, such as the one that implemented its work item.
-    func sessionsLinked(to pr: PullRequest) -> [WorkSession] {
-        buildSessions.filter { $0.role != .overseer && linkedPRs($0).contains { $0.id == pr.id } }
-    }
+    func sessionsLinked(to pr: PullRequest) -> [WorkSession] { engine.sessions.sessionsLinked(to: pr) }
 
     func openPRInBuild(_ id: Int) {
         mode = .build

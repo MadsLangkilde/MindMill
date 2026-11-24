@@ -7,10 +7,15 @@ let package = Package(
     products: [
         .executable(name: "KB", targets: ["KB"]),
     ],
+    dependencies: [
+        .package(path: "../core"),
+    ],
     targets: [
-        .target(name: "KBCore"),
-        .executableTarget(name: "KB", dependencies: ["KBCore"]),
-        .testTarget(name: "KBCoreTests", dependencies: ["KBCore"]),
+        .executableTarget(name: "KB", dependencies: [
+            .product(name: "KBCore", package: "core"),
+            .product(name: "KBEngine", package: "core"),
+        ]),
+        .testTarget(name: "KBAppTests", dependencies: ["KB", .product(name: "KBCore", package: "core"), .product(name: "KBEngine", package: "core")]),
     ],
     swiftLanguageModes: [.v5]
 )

@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// A box in a strategy diagram.

@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// A follow-up's facts in the detail view: who, when, where it came from, and, once closed, how it was resolved.

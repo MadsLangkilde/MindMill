@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct FollowupCloseRequest: Identifiable, Equatable {
@@ -182,39 +183,14 @@ extension AppModel {
     }
 
     func setChecked(_ item: DailyPlan.Item, done: Bool) {
-        do {
-            try DailyPlan.setDone(date: dailyDate, lineText: item.lineText, done: done, root: rootURL)
-            if let r = linkedReminder(item), (r.status == .done) != done {
-                try Reminders.setStatus(r, done ? .done : .open)
-            }
-            reload()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        do { try engine.setPlanItem(item, date: dailyDate, done: done) } catch { errorMessage = error.localizedDescription }
     }
 
-    func runMorningRoutine() {
-        let date = dailyDate
-        let synced = calendarSync.lastSuccess.map { Calendar.current.isDateInToday($0) } ?? false
-        guard let launch = launch(prompt: ClaudeModes.morning(date, calendarSynced: synced), sessionID: UUID().uuidString.lowercased(),
-                                  resume: false, model: defaultModel, cwd: rootURL) else {
-            errorMessage = claudeMissingExplanation
-            return
-        }
-        do {
-            morning.reset()
-            try morning.start(launch, mode: "morning")
-            morning.items.append(.init(role: .status, text: "Morning routine for \(DateText.display(date)) started."))
-            morning.send(ClaudeModes.warmup, tag: "connect", show: false)
-            morning.send("today", tag: "morning", show: false)
-        } catch {
-            errorMessage = "Could not start claude: \(error.localizedDescription)"
-        }
-    }
+    func runMorningRoutine() { engine.routines.runMorning(date: dailyDate) }
 
     // MARK: CLI actions
 
-    private func runCLI(_ ids: [EntryID], success: String?, _ work: @escaping (KBCLI, EntryID) async throws -> Void) {
+    func runCLI(_ ids: [EntryID], success: String?, _ work: @escaping (KBCLI, EntryID) async throws -> Void) {
         let cli = cli
         for id in ids {
             busyEntries.insert(id)
@@ -255,13 +231,13 @@ extension AppModel {
         }
     }
 
-    func createBacklog(_ id: EntryID, sprint: Sprint) {
+    /// `parent` nil leaves it to the entry and its text; empty means none.
+    func createBacklog(_ id: EntryID, sprint: Sprint, parent: String? = nil) {
         busyEntries.insert(id)
         if document?.id == id, document?.isDirty == true { save() }
-        let cli = cli
         Task {
             do {
-                let created = try await cli.createBacklog(id, sprint: sprint)
+                let created = try await engine.backlog.create(id, sprint: sprint, parent: parent)
                 notice = created.map { "Created work item \($0.id)." } ?? "Created."
             } catch {
                 errorMessage = error.localizedDescription
@@ -306,7 +282,7 @@ extension AppModel {
     }
 
     func rejectBacklog(_ id: EntryID) {
-        runCLI([id], success: "Rejected.") { cli, id in try await cli.rejectBacklog(id) }
+        runCLI([id], success: "Rejected.") { [engine] _, id in try await engine.backlog.reject(id) }
     }
 
     // MARK: Ask

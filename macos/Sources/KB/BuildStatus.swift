@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
@@ -16,201 +17,49 @@ extension AppModel {
         }
     }
 
-    /// The open pull requests of the work a session is about: its own PR, or the PRs of its work item.
-    func linkedPRs(_ s: WorkSession) -> [PullRequest] {
-        guard let about = s.about, let list = pullRequests else { return [] }
-        if let id = Self.number(about, "mypr:") { return list.pr(id).map { [$0] } ?? [] }
-        if let id = Self.number(about, "wi:"), let item = myWork?.items.first(where: { $0.id == id }) {
-            return item.prs.compactMap { list.pr($0.id) }
-        }
-        return []
-    }
+    func linkedPRs(_ s: WorkSession) -> [PullRequest] { engine.sessions.linkedPRs(s) }
 
-    func linkedPR(_ s: WorkSession) -> PullRequest? { linkedPRs(s).first }
+    func linkedPR(_ s: WorkSession) -> PullRequest? { engine.sessions.linkedPR(s) }
 
-    /// The pull requests that can be completed now: the session's own and, for a lead, those of the sessions under
-    /// it, each with the session that made it.
-    func readyPRs(_ s: WorkSession) -> [(pr: PullRequest, session: WorkSession)] {
-        let from = s.role == .lead ? [s] + members(of: s) : [s]
-        var seen = Set<Int>()
-        return from.flatMap { m in linkedPRs(m).map { (pr: $0, session: m) } }
-            .filter { $0.pr.canComplete && !$0.pr.draft && seen.insert($0.pr.id).inserted }
-    }
+    func readyPRs(_ s: WorkSession) -> [(pr: PullRequest, session: WorkSession)] { engine.sessions.readyPRs(s) }
 
-    static let stuckPRsReportedKey = "stuckPRsReported"
+    var stuckPRs: [PullRequest] { engine.sessions.stuckPRs }
 
-    /// Approved pull requests held up by a failed or stuck build or merge conflicts.
-    var stuckPRs: [PullRequest] { PRRescue.blocked(pullRequests?.prs ?? []) }
+    var prRescueSession: WorkSession? { engine.sessions.prRescueSession }
 
-    /// The session working through the stuck PRs, while it isn't archived.
-    var prRescueSession: WorkSession? {
-        buildSessions.first { $0.title == "Complete approved PRs" && !isArchived($0) }
-    }
-
-    /// Tells the overview session when an approved PR gets stuck, so the user can have them all fixed from there.
-    /// Once per PR joining the list; `force` reports the current list now (My Work's button).
+    /// Tells the overview session when an approved PR gets stuck; `force` (My Work's button) also opens it.
     func reportStuckPRs(force: Bool = false) {
-        guard backgroundStarted || force else { return }
-        let stuck = stuckPRs
-        let last = Set(UserDefaults.standard.array(forKey: Self.stuckPRsReportedKey) as? [Int] ?? [])
-        UserDefaults.standard.set(stuck.map(\.id), forKey: Self.stuckPRsReportedKey)
-        guard !stuck.isEmpty, force || (PRRescue.shouldReport(stuck, lastReported: last) && prRescueSession == nil) else { return }
-        deliver(PRRescue.report(stuck), to: ensureOverseer(), from: "the Mindmill app")
-        if force {
+        if engine.sessions.reportStuckPRs(force: force), force {
             mode = .build
             buildSelection = nil
-        } else {
-            notice = "\(stuck.count) approved PR\(stuck.count == 1 ? " is" : "s are") stuck. The overview session asks what to do."
         }
     }
 
-    /// Asks the session to clear what keeps its approved pull request from completing.
-    func fixBlockers(_ pr: PullRequest, in s: WorkSession) {
-        let list = pr.blockers.map { "- \($0)" }.joined(separator: "\n")
-        send("""
-        !\(pr.id) is approved but can't be completed yet:
-        \(list)
-        Clear these: for a failed build, find the failing step in the PR's build and fix it; for merge conflicts, merge \
-        the target branch into this branch and resolve them; a queued or running build only needs waiting. Push the \
-        fixes, then tell me when it can be completed. Ask before anything you're unsure of.
-        """, in: s, display: "Fix what blocks !\(pr.id): \(pr.blockers.joined(separator: ", "))")
-    }
+    func fixBlockers(_ pr: PullRequest, in s: WorkSession) { engine.sessions.fixBlockers(pr, in: s) }
 
-    /// The work is over: its PR completed, its item resolved and merged, or the review no longer waits.
-    /// Unknown until Azure DevOps has answered, and never while the session runs.
-    func isWorkDone(_ s: WorkSession) -> Bool {
-        guard let about = s.about, !s.chat.isBusy, !s.crewState.needsUser else { return false }
-        let quiet = Date().timeIntervalSince(s.updated) > 3600
-        if let id = Self.number(about, "wi:"), let work = myWork {
-            let item = work.items.first { $0.id == id }
-            // Its PR just completed: done now, before the work item itself moves.
-            if pullRequests?.workMerged(item: id, itemPRs: item?.prs.map(\.id) ?? []) == true { return true }
-            if let item { return item.stage == .resolved && linkedPRs(s).isEmpty }
-            return quiet
-        }
-        if let id = Self.number(about, "mypr:"), let list = pullRequests {
-            guard let pr = list.pr(id) else { return list.closed.contains { $0.id == id } || quiet }
-            // A comments session is done once they're answered and the work item's own session carries the PR.
-            return pr.openThreads == 0 && Date().timeIntervalSince(s.updated) > 600 && buildSessions.contains {
-                $0 !== s && $0.role != .member && ($0.about?.hasPrefix("wi:") ?? false) && linkedPRs($0).contains { $0.id == id }
-            }
-        }
-        if let id = Self.number(about, "pr:"), let work = myWork { return !work.reviews.contains { $0.id == id } && quiet }
-        return false
-    }
+    func isWorkDone(_ s: WorkSession) -> Bool { engine.sessions.isWorkDone(s) }
 
-    /// A conflict or build problem on the session's open pull request.
-    func prProblem(_ s: WorkSession) -> PRProblem? {
-        guard s.role != .member, ![.draft, .done].contains(status(s)) else { return nil }
-        return PRProblem.shown(linkedPR(s).flatMap(PRProblem.of), status: status(s))
-    }
+    func prProblem(_ s: WorkSession) -> PRProblem? { engine.sessions.prProblem(s) }
 
-    /// What the session is doing, and where its work item or pull request stands, for the row and the header.
-    func badges(_ s: WorkSession) -> SessionBadges {
-        let about = s.about ?? ""
-        var known = true
-        var item: MyWork.Stage?
-        var reviewing = false
-        if let id = Self.number(about, "wi:") {
-            known = myWork != nil
-            item = myWork?.items.first { $0.id == id }?.stage
-        } else if about.hasPrefix("mypr:") {
-            known = pullRequests != nil
-        } else if let id = Self.number(about, "pr:") {
-            known = myWork != nil
-            reviewing = myWork?.reviews.contains { $0.id == id } ?? false
-        }
-        let linked = s.role != .member && ["wi:", "mypr:", "pr:"].contains { about.hasPrefix($0) }
-        let pr = linkedPR(s).map(prState)
-        // A PR or item that has left the open lists is finished, even before the session counts as done.
-        let gone = known && pr == nil && item == nil && !reviewing
-        var badges = SessionBadges.of(s.crewState, linked: linked, known: known, pr: pr, item: item,
-                                      workDone: isWorkDone(s) || gone)
-        if reviewing, badges.work == nil { badges.work = .inReview }
-        return badges
-    }
+    func badges(_ s: WorkSession) -> SessionBadges { engine.sessions.badges(s) }
 
-    private func prState(_ pr: PullRequest) -> SessionStatus.PRState {
-        SessionStatus.PRState(canComplete: pr.canComplete, openThreads: pr.openThreads, draft: pr.draft,
-                              approved: pr.approvals > 0 && pr.rejections == 0 && !pr.reviewers.contains { $0.vote == -5 },
-                              autoComplete: pr.autoComplete, building: pr.waitingForChecks,
-                              buildQueued: pr.buildQueuedOnly)
-    }
+    func status(_ s: WorkSession) -> SessionStatus { engine.sessions.status(s) }
 
-    func status(_ s: WorkSession) -> SessionStatus {
-        let pr = s.role == .member ? nil : linkedPR(s).map(prState)
-        return SessionStatus.of(s.crewState, pr: pr, workDone: isWorkDone(s))
-    }
+    func isArchived(_ s: WorkSession) -> Bool { engine.sessions.isArchived(s) }
 
-    /// Archived by the user, or done by itself unless the user kept it. A session that needs the user never hides.
-    func isArchived(_ s: WorkSession) -> Bool {
-        if s.chat.isBusy || s.crewState.needsUser { return false }
-        if let lead = s.parentID.flatMap({ session($0) }), s.role == .member, isArchived(lead) { return true }
-        return s.archived ?? (status(s) == .done && DoneArchive.autoArchived(doneSince: sessionsDoneSince?[s.id]))
-    }
+    func asksToArchive(_ s: WorkSession) -> Bool { engine.sessions.asksToArchive(s) }
 
-    /// Done and not yet archived or kept: the session asks whether to archive it.
-    func asksToArchive(_ s: WorkSession) -> Bool {
-        s.role != .overseer && s.role != .member && s.archived == nil && !isArchived(s) && status(s) == .done
-    }
+    func noteDoneSessions() { engine.sessions.noteDoneSessions() }
 
-    /// Notes when sessions turn done, once their work items and pull requests are known, so each asks to be
-    /// archived before it is archived by itself.
-    func noteDoneSessions() {
-        guard myWork != nil, pullRequests != nil else { return }
-        let done = Set(buildSessions.filter { $0.role != .overseer && $0.role != .member && $0.archived == nil && status($0) == .done }.map(\.id))
-        let next = DoneArchive.update(sessionsDoneSince, done: done)
-        guard next != sessionsDoneSince else { return }
-        sessionsDoneSince = next
-        UserDefaults.standard.set(next.mapValues(\.timeIntervalSince1970), forKey: Self.doneSinceKey)
-    }
+    func doneReason(_ s: WorkSession) -> String { engine.sessions.doneReason(s) }
 
-    /// What finished the session's work, for the Archive question.
-    func doneReason(_ s: WorkSession) -> String {
-        let about = s.about ?? ""
-        if let id = Self.number(about, "wi:") {
-            let itemPRs = myWork?.items.first { $0.id == id }?.prs.map(\.id) ?? []
-            if let pr = pullRequests?.closed.first(where: { $0.completed && ($0.workItems.contains(id) || itemPRs.contains($0.id)) }) {
-                return "!\(pr.id) is completed."
-            }
-            return "#\(id) is resolved or closed."
-        }
-        if let id = Self.number(about, "mypr:") {
-            if let c = pullRequests?.closed.first(where: { $0.id == id }) { return "!\(id) is \(c.completed ? "completed" : "abandoned")." }
-            return "!\(id) is no longer open."
-        }
-        if let id = Self.number(about, "pr:") { return "!\(id) no longer waits for your review." }
-        return "Its work is done."
-    }
+    func setArchived(_ s: WorkSession, _ on: Bool) { engine.sessions.setArchived(s, on) }
 
-    func setArchived(_ s: WorkSession, _ on: Bool) {
-        s.archived = on
-        for m in members(of: s) { m.archived = on }
-        saveSessions()
-    }
+    var buildStatusKnown: Bool { engine.sessions.buildStatusKnown }
 
-    /// Whether every Build session's state can be told yet: a finished one hides only once its work item or pull
-    /// request has been looked up (or the lookup failed), so lists wait for that instead of showing it first.
-    var buildStatusKnown: Bool {
-        let workKnown = myWork != nil || myWorkError != nil
-        let prsKnown = pullRequests != nil || pullRequestsError != nil
-        if workKnown && prsKnown { return true }
-        return !buildSessions.contains { s in
-            guard s.role != .overseer, s.archived == nil, let about = s.about else { return false }
-            if about.hasPrefix("wi:") { return !workKnown || !prsKnown }
-            if about.hasPrefix("pr:") { return !workKnown }
-            if about.hasPrefix("mypr:") { return !prsKnown }
-            return false
-        }
-    }
+    var archivedBuildSessions: [WorkSession] { engine.sessions.archivedBuildSessions }
 
-    var archivedBuildSessions: [WorkSession] {
-        buildSessions.filter { $0.role != .overseer && $0.role != .member && isArchived($0) }.sorted { $0.updated > $1.updated }
-    }
-
-    static func number(_ key: String, _ prefix: String) -> Int? {
-        key.hasPrefix(prefix) ? Int(key.dropFirst(prefix.count)) : nil
-    }
+    static func number(_ key: String, _ prefix: String) -> Int? { SessionHub.number(key, prefix) }
 }
 
 /// The session's status as a coloured label; it pulses while the session needs the user.

@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Under the editor whenever there is something to save: a draft to turn into a real entry, or unsaved edits.

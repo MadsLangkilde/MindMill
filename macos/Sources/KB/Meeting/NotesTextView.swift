@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// A plain-text editor that reports where given paragraphs sit vertically in the visible area,

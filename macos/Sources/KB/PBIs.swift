@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct NewPBIRequest: Identifiable, Equatable {
@@ -94,25 +95,76 @@ extension AppModel {
     }
 
     func workItemURL(_ number: Int, project: String) -> URL? {
+        workItemURL(String(number), project: project)
+    }
+
+    func workItemURL(_ item: String, project: String) -> URL? {
         let t = settings(for: project).tracker
-        guard t.kind == "azure-devops", !t.organization.isEmpty, !t.project.isEmpty else { return nil }
-        let org = t.organization.hasPrefix("http") ? t.organization : "https://dev.azure.com/\(t.organization)"
-        let project = t.project.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? t.project
-        return URL(string: "\(org)/\(project)/_workitems/edit/\(number)")
+        return TrackerLink.url(kind: t.kind, organization: t.organization, project: t.project, item: item)
+    }
+
+    /// The name of the scope's tracker: Azure DevOps, Jira, Mindmill…
+    func trackerName(_ project: String) -> String { TrackerLink.name(settings(for: project).tracker.kind) }
+
+    /// The work item a session is about, if any.
+    func sessionWorkItem(_ s: WorkSession) -> String? {
+        TrackerLink.workItem(about: s.about) { [index] id in index.entry(id)?.field("work_item") }
+    }
+
+    /// Makes a suggested backlog item from a reminder (its title and note) and opens the create dialog for it.
+    func backlogItem(from r: Reminder) {
+        guard let scope = r.project ?? projectID else {
+            errorMessage = "Pick a project first: the reminder has none."
+            return
+        }
+        let bug = r.title.range(of: #"\b(bug|fejl|crash|broken)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+        Task {
+            do {
+                let raw = try await engine.backlog.propose(title: r.title, details: r.note, bug: bug, scope: scope, source: nil)
+                guard let id = EntryID(raw) else { throw ActionError("Mindmill didn't say which entry it made.") }
+                reload()
+                backlogBatchRequest = BacklogBatchRequest(entries: [id], context: "the reminder")
+            } catch {
+                errorMessage = "Couldn't make the backlog item: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Turns a "create a PBI" follow-up into a suggested backlog item and opens it.
+    func followupToBacklog(_ id: EntryID) {
+        let cli = cli
+        Task {
+            do {
+                let out = try await cli.run(["followup", "to-backlog", id.rawValue]).trimmingCharacters(in: .whitespacesAndNewlines)
+                reload()
+                if let new = EntryID(out) {
+                    checkDuplicates(scope: new.project, force: true)
+                    open(new)
+                }
+                notice = "Moved to Suggested backlog items."
+            } catch {
+                errorMessage = "Couldn't move it: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Shows a work item of Mindmill's own tracker under Plan → Backlog.
+    func showLocalItem(_ number: Int, project: String) {
+        navigate { [self] in
+            mode = .plan
+            if projectID != project { setProject(project) }
+            sidebarSelection = .section(.backlog)
+            closeDocument()
+            showProposedBacklog = false
+            selectedLocalItem = number
+        }
     }
 
     /// A proposed backlog entry sourced from `source`; it waits in Backlog with a Create button.
     func addProposedPBI(source: EntryID, title: String, details: String, bug: Bool, scope: String) {
-        let summary = details.split(separator: "\n").first.map(String.init) ?? ""
-        var args = ["new", "backlog", "--project", scope, "--title", title, "--source", source.rawValue,
-                    "--type", bug ? "bug" : "pbi", "--cross-project"]
-        if !summary.isEmpty { args += ["--summary", String(summary.prefix(200))] }
-        if !details.isEmpty { args.append("--body-stdin") }
-        let cli = cli
         Task {
             do {
-                _ = try await cli.run(args, stdin: details.isEmpty ? nil : details + "\n")
-                reload()
+                try await engine.backlog.propose(title: title, details: details, bug: bug, scope: scope, source: source)
                 notice = "Added “\(title)” to \(index.project(scope)?.title ?? scope)'s backlog as a proposal."
             } catch {
                 notice = error.localizedDescription
@@ -125,7 +177,7 @@ extension AppModel {
         let b = brief.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !b.isEmpty else { return createWorkItem(from: id) }
         let title = index.entry(id)?.title ?? id.stem
-        newSession(title: "PBI: \(title)", project: id.project, message: "/kb:create-pbi \(id.rawValue) \(b)",
+        newSession(title: "PBI: \(title)", project: id.project, message: "/mindmill:create-pbi \(id.rawValue) \(b)",
                    display: "Create a PBI from “\(title)”: \(b)")
     }
 
@@ -138,7 +190,7 @@ extension AppModel {
 
     static func suggestPBIsPrompt(_ id: EntryID) -> String {
         """
-        Suggest the PBIs and bugs that the \(id.section.singularTitle.lowercased()) `\(id.rawValue)` calls for (everything it says: prep, questions, points, notes, findings, summary), following the kb:work-item skill's "Proposing from the knowledge base" rules. First check what exists: `kb list --section backlog` and `kb tracker items --search "<2–3 keywords>"` for each candidate. For one that exists, don't propose it again: list it as `#<id> <title> (<state>)`. Write each new one as a proposed backlog entry with `--source \(id.rawValue)` (title and body name it in words, never by KB id, since work items are shared). Don't create anything in Azure DevOps. Reply with two short lists: Already exists, and Proposed.
+        Suggest the PBIs and bugs that the \(id.section.singularTitle.lowercased()) `\(id.rawValue)` calls for (everything it says: prep, questions, points, notes, findings, summary), following the mindmill:work-item skill's "Proposing from the knowledge base" rules. First check what exists: `kb list --section backlog` and `kb tracker items --search "<2–3 keywords>"` for each candidate. For one that exists, don't propose it again: list it as `#<id> <title> (<state>)`. Write each new one as a proposed backlog entry with `--source \(id.rawValue)` (title and body name it in words, never by KB id, since work items are shared). \(WorkItemLinks.proposalRule) Don't create anything in the tracker. Reply with two short lists: Already exists, and Proposed.
         """
     }
 }
@@ -162,7 +214,7 @@ struct RelatedPBIRow: View {
                 Text(pbi.title).lineLimit(2).multilineTextAlignment(.leading)
             }
             .buttonStyle(.plain)
-            .help(pbi.entry != nil ? "Open the backlog entry" : "Open in Azure DevOps")
+            .help(pbi.entry != nil ? "Open the backlog entry" : "Open in \(TrackerLink.name(forURL: pbi.url?.absoluteString ?? ""))")
             Spacer(minLength: 6)
             if !pbi.state.isEmpty {
                 Chip(text: pbi.state, color: pbi.state == "Proposed" ? .orange : pbi.state == "Done" ? .green : .secondary)
@@ -170,7 +222,7 @@ struct RelatedPBIRow: View {
             if pbi.state == "Proposed", let e = pbi.entry {
                 Button("Create…") { model.backlogCreateRequest = BacklogCreateRequest(entry: e) }
                     .controlSize(.small)
-                    .help("Create it in Azure DevOps")
+                    .help("Create it in \(model.trackerName(e.project))")
             }
         }
         .font(.callout)

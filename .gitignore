@@ -2,3 +2,4 @@
 __pycache__/
 macos/.build/
 macos/build/
+core/.build/

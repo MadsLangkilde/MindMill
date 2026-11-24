@@ -1,6 +1,6 @@
 ---
 name: reference
-description: Save a copy of an email, a Teams conversation or other material in the KB's References so it can be found and read later by Ask, briefs and sessions. Use for "save this email", "keep this thread for later", "add this to references", and when the Mindmill app sends `/kb:reference email|teams <scope> <what to look for>`.
+description: Save a copy of an email, a Teams conversation or other material in the KB's References so it can be found and read later by Ask, briefs and sessions. Use for "save this email", "keep this thread for later", "add this to references", and when the Mindmill app sends `/mindmill:reference email|teams <scope> <what to look for>`.
 allowed-tools: Bash(kb:*), mcp__claude_ai_Microsoft_365__outlook_email_search, mcp__claude_ai_Microsoft_365__chat_message_search, mcp__claude_ai_Microsoft_365__teams_list_chats, mcp__claude_ai_Microsoft_365__read_resource
 ---
 
@@ -47,7 +47,7 @@ another scope. Before saving, `kb list --section references` to see whether it's
 offer to replace its Content instead.
 
 5. Reply in two lines: what you saved and its id. If it holds a fact, a decision or an open discussion, offer to
-   file that too (facts through `kb inbox add`, discussions through the kb:discussion skill).
+   file that too (facts through `kb inbox add`, discussions through the mindmill:discussion skill).
 
 ## Rules
 

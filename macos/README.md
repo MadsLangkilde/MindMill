@@ -9,11 +9,13 @@ made by Claude or another editor appear immediately.
 ```sh
 ./build.sh            # swift build -c release, assembles and ad-hoc signs build/Mindmill.app
 ./build.sh --install  # also copies it to ~/Applications/Mindmill.app and registers the kb:// scheme
-swift test            # unit tests for the parser, serialiser, index, store and Markdown renderer
+swift test            # the app target's own tests (the shared code's tests run in ../core)
 ```
 
-No third-party dependencies. `KBCore` (plain Swift) holds parsing, serialising, indexing, file writes,
-the Markdown renderer and the FSEvents watcher; `KB` is the SwiftUI app.
+No third-party dependencies. The shared code is the Swift package in `../core` (see `../core/README.md`):
+`KBCore` holds parsing, serialising, indexing, file writes, the Markdown renderer and the file watcher; `KBEngine`
+the engine work without UI (Claude chats, voice conversations, the companion hub, the factory's decisions). `KB` is
+the SwiftUI app and the macOS adapters (`MacPlatform.swift`, `MacCompanionTransport.swift`).
 
 ## Knowledge base root
 

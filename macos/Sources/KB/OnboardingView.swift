@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
@@ -42,13 +43,15 @@ extension AppModel {
         newSession(title: "Set up my tools", message: brief, display: "Set up my tools with \(Brain.name)", space: .plan)
     }
 
-    /// Whether `/kb` works in Claude Code outside KB: the plugin installed from Mindmill's own copy.
+    static let pluginID = "mindmill@mindmill"
+
+    /// Whether `/mindmill` works in Claude Code outside KB: the plugin installed from Mindmill's own copy.
     func checkClaudePlugin() {
         guard case .found(let exe) = claudeAvailability else { return }
         let env = claudeEnvironment()
         Task {
             let r = await AzureCLISignIn.run(exe, ["plugin", "list"], environment: env)
-            claudePluginInstalled = r.output.contains("kb@kb")
+            claudePluginInstalled = r.output.contains(Self.pluginID)
         }
     }
 
@@ -60,10 +63,13 @@ extension AppModel {
         installingClaudePlugin = true
         Task {
             defer { installingClaudePlugin = false }
+            // The plugin was called kb before; take that one out so the skills don't load twice.
+            _ = await AzureCLISignIn.run(exe, ["plugin", "uninstall", "kb@kb"], environment: env)
+            _ = await AzureCLISignIn.run(exe, ["plugin", "marketplace", "remove", "kb"], environment: env)
             _ = await AzureCLISignIn.run(exe, ["plugin", "marketplace", "add", path], environment: env)
-            let r = await AzureCLISignIn.run(exe, ["plugin", "install", "kb@kb"], environment: env)
+            let r = await AzureCLISignIn.run(exe, ["plugin", "install", Self.pluginID], environment: env)
             let list = await AzureCLISignIn.run(exe, ["plugin", "list"], environment: env)
-            claudePluginInstalled = list.output.contains("kb@kb")
+            claudePluginInstalled = list.output.contains(Self.pluginID)
             if claudePluginInstalled != true {
                 errorMessage = "Claude Code didn't add Mindmill's plugin:\n\n" + String(r.output.suffix(600))
             }
@@ -255,8 +261,8 @@ private struct AssistantStep: View {
             if case .found = model.claudeAvailability, model.pluginFound, model.aiSetup.brainProvider.id == AIProvider.claudeCode.id {
                 RequirementRow(ok: model.claudePluginInstalled,
                                title: "Mindmill in Claude Code (optional)",
-                               detail: model.claudePluginInstalled == true ? "/kb works in Claude Code in Terminal too."
-                                   : "Adds Mindmill's skills to Claude Code, so /kb works in Terminal and your editor too. Mindmill itself works without it.") {
+                               detail: model.claudePluginInstalled == true ? "/mindmill works in Claude Code in Terminal too."
+                                   : "Adds Mindmill's skills to Claude Code, so /mindmill works in Terminal and your editor too. Mindmill itself works without it.") {
                     if model.installingClaudePlugin {
                         ProgressView().controlSize(.small)
                     } else if model.claudePluginInstalled != true {

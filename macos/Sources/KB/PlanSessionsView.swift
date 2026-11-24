@@ -1,22 +1,7 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
-
-extension WorkSession {
-    /// The work items this session created, worked out again only when the conversation grows.
-    var createdItems: [Int] {
-        if createdItemsCache.count == chat.items.count { return createdItemsCache.ids }
-        let ids = PlanSessions.createdItems(chat.items.filter { $0.role != .user }.map(\.text))
-        createdItemsCache = (chat.items.count, ids)
-        return ids
-    }
-
-    var isResearchSession: Bool { about?.hasPrefix("research:") == true }
-
-    var planKind: PlanSessionKind {
-        PlanSessions.kind(title: title, about: about, firstMessage: chat.items.first { $0.role == .user }?.text ?? "")
-    }
-}
 
 /// A Plan conversation that lives in its own place rather than in a session: a meeting's chat, a goal's coach, or
 /// Ask. Plan → Sessions lists it with the sessions; opening it goes to that place.
@@ -96,16 +81,12 @@ enum PlanItem: Identifiable {
 }
 
 extension AppModel {
-    var planSessions: [WorkSession] {
-        sessions.filter { $0.space == .plan && $0.role != .overseer }.sorted { $0.updated > $1.updated }
-    }
+    var planSessions: [WorkSession] { engine.sessions.planSessions }
 
     var planSessionsNeedingUser: [WorkSession] { planSessions.filter { $0.archived != true && $0.crewState.needsUser } }
 
     /// The Plan session that created this work item, for "Planned in" on its Build session.
-    func planSession(creating item: Int) -> WorkSession? {
-        planSessions.first { $0.createdItems.contains(item) }
-    }
+    func planSession(creating item: Int) -> WorkSession? { engine.sessions.planSession(creating: item) }
 
     func openPlanSession(_ s: WorkSession) {
         mode = .plan
@@ -124,8 +105,7 @@ extension AppModel {
     // MARK: Conversations that aren't sessions
 
     private var meetingChatsDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("KB/meeting-chats", isDirectory: true)
+        AppPaths.data.appendingPathComponent("meeting-chats", isDirectory: true)
     }
 
     /// Reads which meetings have a chat, once; `MeetingController` keeps it current after that.
@@ -283,8 +263,14 @@ struct PlanSessionSections: View {
     /// The scope listed; rows from other scopes (or every row, when nil) say which scope they are in.
     var scope: String?
     var inSessionsWindow = false
-    @State private var showOlder = false
-    @State private var showArchived = false
+    private var showOlder: Bool {
+        get { model.foldStates["plansessions.older"] ?? false }
+        nonmutating set { model.foldStates["plansessions.older"] = newValue }
+    }
+    private var showArchived: Bool {
+        get { model.foldStates["plansessions.archived"] ?? false }
+        nonmutating set { model.foldStates["plansessions.archived"] = newValue }
+    }
 
     var body: some View {
         ForEach(groups.sections, id: \.kind) { section in
@@ -295,14 +281,14 @@ struct PlanSessionSections: View {
             }
         }
         if !groups.older.isEmpty {
-            FoldableSection(isExpanded: $showOlder) {
+            FoldableSection(isExpanded: model.fold("plansessions.older")) {
                 ForEach(groups.older) { row($0) }
             } header: {
                 Text("Older · \(groups.older.count)")
             }
         }
         if !groups.archived.isEmpty {
-            FoldableSection(isExpanded: $showArchived) {
+            FoldableSection(isExpanded: model.fold("plansessions.archived")) {
                 ForEach(groups.archived) { row($0) }
             } header: {
                 Text("Archived · \(groups.archived.count)")

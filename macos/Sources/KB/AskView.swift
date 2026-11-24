@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import Observation
 import SwiftUI
 

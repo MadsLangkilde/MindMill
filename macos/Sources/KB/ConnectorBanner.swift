@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Shown wherever Claude needs a tool (calendar, Teams, email, Jira…) that is signed out or failing: why, and the fix.

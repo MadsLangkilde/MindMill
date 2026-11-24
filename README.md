@@ -8,7 +8,7 @@ its command line are called `kb`.
 - **Session start:** Claude loads the index of the project you're in, plus related projects for reference.
 - **Task start:** Claude opens with a short *From the KB* brief when something is relevant.
 - **You overrule the KB:** Claude does it your way and records a new decision that supersedes the old one.
-- **Meetings:** `kb:meeting` prepares questions and flags conflicts in one or two lines while you take
+- **Meetings:** `mindmill:meeting` prepares questions and flags conflicts in one or two lines while you take
   notes. When you're done, it files the notes and decisions into the project.
 - **Editing in the app:** whatever is on disk is the truth. The next prompt in a running session is told
   which entries changed.
@@ -26,7 +26,7 @@ The first time it opens, Mindmill walks through setup:
 
 1. **Your AI.** Pick the brain (Claude Code today), and optionally other models for specific tasks. Mindmill checks it's
    installed (and offers to install it in Terminal), that you're signed in, and that Python 3 is there (it offers
-   Apple's command line tools). **Add to Claude Code** also makes `/kb` work in Terminal and your editor.
+   Apple's command line tools). **Add to Claude Code** also makes `/mindmill` work in Terminal and your editor.
 2. **Knowledge base.** Where it lives, and a first project.
 3. **Your tools.** Where you track work (Azure DevOps, Jira, GitHub, Linear or Mindmill's own tracker) and mail, calendar,
    chat and docs. **Set Up with Claude** starts a session that checks each tool, helps you connect what's missing and
@@ -43,33 +43,33 @@ checkout you edit instead of the plugin inside the app.
 
 ```
 /plugin marketplace add <path to this repo>
-/plugin install kb@kb
+/plugin install mindmill@mindmill
 ```
 
 The knowledge base defaults to `~/projects/knowledge`. Change it in `~/.config/kb/config.json`
-(`{"root": "…"}`, shared with the app) or via `/plugin configure kb`. `/kb` opens the app on the current project.
+(`{"root": "…"}`, shared with the app) or via `/plugin configure mindmill`. `/mindmill` opens the app on the current project.
 
 ## Skills
 
 | Skill | Use |
 |---|---|
-| `/kb` | Open the app, search, list, add facts, sources and settings, register a project |
-| `kb:ask` | Answer a question from every source: the knowledge base, code, related projects, wiki, work items, Teams, email, docs, MCP, commands |
-| `kb:brief` | What the KB says about the task at hand |
-| `kb:decide` | Record a decision, supersede one, or propose one to the inbox |
-| `kb:calendar` | Mirror today's and tomorrow's Outlook events as meeting files |
-| `kb:email` | Propose reminders from new email that needs you, keep open discussions up to date; skip newsletters and notifications |
-| `kb:reference` | Save a copy of an email or a Teams chat in References, without email addresses |
-| `kb:discussion` | Track an email thread or chat that isn't settled: points, open questions, findings; file the findings when ready |
-| `kb:goals` | Coach personal long-term goals: what it takes, next steps, progress, and proposing progress you made |
-| `kb:idea` | Brainstorm ideas and turn them into backlog items, facts, decisions, follow-ups, architecture notes or a new project |
-| `kb:research` | Research a question with Claude, alone or for a PBI, idea or discussion; finish with a summary, takeaways for the PBI and proposed facts |
-| `kb:prep` | Prepare any meeting: looks back at the series and what happened since, then topics or questions |
-| `kb:meeting` | Capture notes live and propose the outcomes through the inbox |
-| `kb:today` | Morning routine: day plan, prepared meetings, backlog proposals |
-| `kb:work-item` | Draft, propose or create PBIs and bugs step by step; learns each project's tracker, sprints, team and conventions |
-| `kb:create-pbi` | `/kb:create-pbi [<follow-up id>]`: the guided create flow of `kb:work-item` |
-| `kb:migrate-memory` | Move project knowledge out of auto-memory, in batches you approve |
+| `/mindmill` | Open the app, search, list, add facts, sources and settings, register a project |
+| `mindmill:ask` | Answer a question from every source: the knowledge base, code, related projects, wiki, work items, Teams, email, docs, MCP, commands |
+| `mindmill:brief` | What the KB says about the task at hand |
+| `mindmill:decide` | Record a decision, supersede one, or propose one to the inbox |
+| `mindmill:calendar` | Mirror today's and tomorrow's Outlook events as meeting files |
+| `mindmill:email` | Propose reminders from new email that needs you, keep open discussions up to date; skip newsletters and notifications |
+| `mindmill:reference` | Save a copy of an email or a Teams chat in References, without email addresses |
+| `mindmill:discussion` | Track an email thread or chat that isn't settled: points, open questions, findings; file the findings when ready |
+| `mindmill:goals` | Coach personal long-term goals: what it takes, next steps, progress, and proposing progress you made |
+| `mindmill:idea` | Brainstorm ideas and turn them into backlog items, facts, decisions, follow-ups, architecture notes or a new project |
+| `mindmill:research` | Research a question with Claude, alone or for a PBI, idea or discussion; finish with a summary, takeaways for the PBI and proposed facts |
+| `mindmill:prep` | Prepare any meeting: looks back at the series and what happened since, then topics or questions |
+| `mindmill:meeting` | Capture notes live and propose the outcomes through the inbox |
+| `mindmill:today` | Morning routine: day plan, prepared meetings, backlog proposals |
+| `mindmill:work-item` | Draft, propose or create PBIs and bugs step by step; learns each project's tracker, sprints, team and conventions |
+| `mindmill:create-pbi` | `/mindmill:create-pbi [<follow-up id>]`: the guided create flow of `mindmill:work-item` |
+| `mindmill:migrate-memory` | Move project knowledge out of auto-memory, in batches you approve |
 
 ## The app's day
 
@@ -104,7 +104,7 @@ so and **Sign In** opens `claude /mcp` in Terminal.
 
 Claude never quietly adds something you didn't ask for. Meeting outcomes, decisions it noticed and
 morning-routine ideas go to the project's **inbox**, and you approve them in the app or with
-`kb inbox approve`. Proposed PBIs and bugs wait under **Backlog → Waiting to be created** until you
+`kb inbox approve`. Proposed PBIs and bugs wait under **Backlog → Suggested backlog items** until you
 create them (`kb backlog create <id> --yes`). When you file a meeting, the backlog items you ticked are
 offered at once: pick each one's sprint, assignee (a name; it is sent to Azure DevOps as that person's
 email) and parent, then Create, or Not Now to leave them waiting. The meetings list opens on **Today**, with
@@ -147,6 +147,21 @@ sprint and only those past sprints with work left in them; **Older sprints** ope
 with everything finished in it (`kb tracker backlog --sprint`). A past sprint offers **Move N to
 <current sprint>**, and any item can be moved to a sprint or set to a state from its page or right-click
 menu (`kb tracker move`, `kb tracker state`).
+
+**Sprints.** Mindmill reads each tracker's sprints (`kb sprint status`) at launch, on Sync, with the morning routine
+and hourly, and remembers the last one it saw in Application Support. When a new sprint starts, or the last one ends
+with nothing after it, a card in Build and Today offers **Review <sprint>…**: every item the sprint left unfinished,
+yours by default (or with unassigned ones, or the team's), with its state, assignee, open tasks, PRs and session, and
+a suggested decision you can change: done in the process's own state names, move to the new sprint, back to the
+backlog, or remove. **Apply** asks once for the batch, writes each item on its own (`kb sprint apply`) and shows
+each result, with **Retry Failed**. **Not Now** brings it back tomorrow. Mindmill's own tracker can add the next sprint
+(`kb sprint create`); for Azure DevOps the card opens the iteration settings. Jira's sprints are only reachable
+through Claude, so for Jira **Review Last Sprint** starts a session that does the review with its connector.
+
+**Ready to Start** (Build's sidebar) lists what can be started now in the current sprint: not started, no session on
+it yet, filtered by **Assigned to me**, **Me + unassigned** or **Everyone**, and by PBIs, bugs and tasks, remembered
+per scope. **Start…** is the usual Implement; an unassigned item is assigned to you as it starts. It uses the same
+rules as a software factory, so both agree on what is startable.
 
 Every list has its own search field that filters just that list; the toolbar search still looks through
 everything. Searching Backlog or the toolbar also asks Azure DevOps (`kb tracker backlog --search`), so
@@ -264,17 +279,21 @@ marked "not on this branch" rather than put back. What spans projects (kb.json, 
 people) is in `~/knowledgebase/shared/`. The **Overview** scope has no repo, stays private, and shows everything
 in Mindmill. `kb layout show` prints where each scope's folders are.
 
-**Scopes over several repositories.** In Projects and Scopes, a scope's **Repositories** say what it **works
-on** (its own code folder, if any, plus other scopes of the project it is worked on together with, such as a
-Mobile scope over Android and iOS) and what it only takes **knowledge from**, from any project: read only, so
+**Projects, locations and scopes.** **New Project…** and **Edit Projects and Scopes…** (the project menu in the
+toolbar, the sidebar's project name, or View) open one editor: the project's name, its **locations** (the
+folders its code is in, each with a name; at least one for a new project, and each new one can get a scope of
+its own) and its **scopes**. A scope says which locations it **works in**, which other scopes of the project it
+**also shows** (worked on together, such as a Mobile scope over Android and iOS) and what it only takes
+**knowledge from**, from any project: read only, so
 sessions read that code and the knowledge base but never change, branch, commit or open pull requests there. Sessions in the
 scope start in the first repository it works on and can reach all of them. **Project** shows the scope's
 repositories with their branch and how far behind they are; **Pull** (or **Pull All**, or View → Pull
 Repositories of This Scope) fast-forwards them and never merges or overwrites local work. Sessions can do the
 same with `kb repos --fetch` and `kb repos pull [--repo <scope>]`.
 
-**Project** (top of the Plan sidebar) lists the project's repositories, whether each is on this Mac, and the
-team knowledge already in its `knowledgebase/` folder. **Add Repositories…** and **New Project…** take folders;
+**Switching project:** the toolbar's project menu (Plan and Build) lists every project and its scopes;
+⌃⌘1–9 switch to a project on the scope last used there. **Project** (top of the Plan sidebar) lists the project's repositories, whether each is on this Mac, and the
+team knowledge already in its `knowledgebase/` folder. **Add Locations…** and **New Project…** take folders;
 a `knowledgebase/` folder in them shows up in Mindmill at once. On a new Mac, **Create a Knowledge Base Here** makes an
 empty knowledge base, and **Locate…** points a scope at its checkout. **New Scan…** has Claude read repositories (docs, code
 and comments, git history, work items and PRs, what the KB already says) for everything or only what you tick:
@@ -399,7 +418,7 @@ them with `kb search` and every session's context lists them.
   button is in every browser window opened from a chat. **Update Copy** on a saved one reopens it and
   replaces the text, keeping your note.
 - **Email or Teams chat:** give a few words; Claude finds it, asks which one if several fit, and saves the
-  thread without email addresses (`kb:reference`).
+  thread without email addresses (`mindmill:reference`).
 - **File:** PDF, Word, RTF, HTML, Markdown or text, from Add → File or by dropping it on the list. Dropping a
   link opens it in the browser to save.
 
@@ -429,7 +448,7 @@ in a session's prompt dictates into it instead.
   stay in this Mac's Keychain; the phone's audio goes through the Mac. If the API fails, voice falls back to
   built-in and says so.
 
-**The phone app**, [Mindmill for Android](https://github.com/MadsLangkilde/mindmill-android), connects to this Mac over the local network or Tailscale once paired in Settings →
+**The phone apps** (Mindmill for Android and iOS, separate projects) connect to this Mac over the local network or Tailscale once paired in Settings →
 Remote. It has the backlog, facts, follow-ups, meetings (with the phone listening to the room and sharing its
 screen), sessions, factories, voice, and test builds and review cards from Build. The protocol is in
 [docs/remote-api.md](docs/remote-api.md).
@@ -444,5 +463,6 @@ Markdown files with flat frontmatter.
 
 ```
 python3 -m unittest discover -s tests
-cd macos && swift test
+cd core && swift test     # KBCore and KBEngine, the code the Mac and Windows apps share
+cd macos && swift test    # the app target's own tests
 ```

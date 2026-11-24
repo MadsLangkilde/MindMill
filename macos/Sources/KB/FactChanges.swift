@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Which decisions and meetings the background fact check has read, so each is checked once per change.
@@ -19,14 +20,10 @@ extension AppModel {
         index.entries(project: id.project, section: .inbox).filter { $0.field("updates") == id.rawValue }
     }
 
-    func factChangeCount(project: String) -> Int {
-        index.entries(project: project, section: .inbox).filter(\.isFactChange).count
-    }
+    func factChangeCount(project: String) -> Int { engine.factChangeCount(project: project) }
 
     /// New facts proposed by sessions, meetings and reviews, waiting under Facts for the user's yes.
-    func factProposals(project: String) -> [KBEntry] {
-        index.entries(project: project, section: .inbox).filter(\.isFactProposal)
-    }
+    func factProposals(project: String) -> [KBEntry] { engine.factProposals(project: project) }
 
     var factChangeCountAll: Int {
         index.entries.values.filter { $0.section == .inbox && $0.field("updates") != nil }.count
@@ -36,10 +33,9 @@ extension AppModel {
 
     func resolveFactChange(_ change: EntryID, _ how: FactResolution) {
         busyEntries.insert(change)
-        let cli = cli
         Task {
             do {
-                try await cli.run(["fact", "resolve", change.rawValue, "--\(how.rawValue)"])
+                try await engine.resolveFactChange(change, how: how.rawValue)
                 notice = how == .update ? "Fact updated." : how == .keep ? "Kept the fact, verified today." : "Fact removed."
             } catch {
                 errorMessage = error.localizedDescription
@@ -62,7 +58,7 @@ extension AppModel {
     // MARK: Background check
 
     private var factCheckURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KB/factcheck.json")
+        AppPaths.file("factcheck.json")
     }
 
     /// New decisions and filed meetings, with a signature that changes when they do.

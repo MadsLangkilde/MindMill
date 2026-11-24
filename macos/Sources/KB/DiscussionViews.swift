@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct NewDiscussionRequest: Identifiable, Equatable {
@@ -12,18 +13,13 @@ struct ConcludeDiscussionRequest: Identifiable, Equatable {
 }
 
 extension AppModel {
-    /// Claude runs one of the kb:discussion skill's actions on a discussion, in a Plan session.
+    /// Claude runs one of the mindmill:discussion skill's actions on a discussion, in a Plan session.
     func discussionSession(_ action: String, _ id: EntryID, display: String) {
-        let title = index.entry(id)?.title ?? id.stem
-        newSession(title: "Discussion: \(title)", project: id.project, message: "/kb:discussion \(action) \(id.rawValue)",
-                   display: "\(display): \(title)", about: "discussion:\(id.rawValue)")
+        engine.discussionSession(action, id, display: display)
     }
 
     func startDiscussion(project: String, lookFor: String) {
-        let q = lookFor.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return }
-        newSession(title: "New discussion", project: project, message: "/kb:discussion start \(project) \(q)",
-                   display: "Start a discussion from mail or Teams: \(q)")
+        engine.startDiscussion(project: project, lookFor: lookFor)
     }
 
     func setDiscussion(_ id: EntryID, status: DiscussionStatus, outcome: String? = nil) {
@@ -69,8 +65,14 @@ extension AppModel {
 struct DiscussionsView: View {
     @Environment(AppModel.self) private var model
     let project: KBProject
-    @State private var showParked = false
-    @State private var showConcluded = false
+    private var showParked: Bool {
+        get { model.foldStates["discussions.parked"] ?? false }
+        nonmutating set { model.foldStates["discussions.parked"] = newValue }
+    }
+    private var showConcluded: Bool {
+        get { model.foldStates["discussions.concluded"] ?? false }
+        nonmutating set { model.foldStates["discussions.concluded"] = newValue }
+    }
 
     var body: some View {
         let every = model.index.entries(project: project.id, section: .discussions).filter { !$0.isDraft }

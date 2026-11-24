@@ -1,37 +1,15 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
-    func loadPeople() {
-        people = People.load(root: rootURL)
-        peopleLoaded = true
-    }
+    func loadPeople() { engine.plan.loadPeople() }
 
     /// Fetches the Azure DevOps directory when it is missing or a week old, or now when forced.
-    func refreshPeople(force: Bool = false) {
-        if !peopleLoaded { loadPeople() }
-        guard !peopleSyncing else { return }
-        if !force, let at = people.fetched, Date().timeIntervalSince(at) < 7 * 86400 { return }
-        peopleSyncing = true
-        let cli = cli
-        Task {
-            _ = try? await cli.run(["people", "sync"])
-            loadPeople()
-            peopleSyncing = false
-        }
-    }
+    func refreshPeople(force: Bool = false) { engine.plan.refreshPeople(force: force) }
 
     /// Keeps someone in the knowledge base's people.json so they come first next time, with mail and initials when known.
-    func remember(_ p: Person) {
-        let cli = cli
-        var args = ["people", "add", "--name", p.name]
-        if !p.email.isEmpty { args += ["--email", p.email] }
-        if !p.initials.isEmpty { args += ["--initials", p.initials] }
-        Task {
-            _ = try? await cli.run(args)
-            loadPeople()
-        }
-    }
+    func remember(_ p: Person) { engine.plan.remember(p) }
 }
 
 /// Initials in a small circle; a dashed one for someone added by name only.

@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// The parts of the rules, so the outline can show what the one under the pointer changes.
@@ -404,7 +405,7 @@ struct FactoryRulesSheet: View {
         .padding(.vertical, 12)
     }
 
-    static let parallelKey = "factoryMaxParallel"
+    static let parallelKey = FactoryLoop.parallelKey
 
     private func load() {
         guard !loaded else { return }

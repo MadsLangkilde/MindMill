@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -11,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        TextInputCursor.install()
         if let path = ProcessInfo.processInfo.environment["KB_SNAPSHOT"], !path.isEmpty {
             startSnapshots(to: URL(fileURLWithPath: path))
         }
@@ -163,6 +165,8 @@ struct KBCommands: Commands {
             Button("New Goal…") { model.newGoal() }
         }
         CommandGroup(replacing: .saveItem) {
+            Button("Close") { WindowClosing.closeFront() }
+                .keyboardShortcut("w")
             Button("Save") { model.save() }
                 .keyboardShortcut("s")
                 .disabled(!((model.document?.isDirty ?? false) || (model.document?.isDraft ?? false)))
@@ -192,6 +196,14 @@ struct KBCommands: Commands {
             Button("Strategies…") { model.strategiesSheet = StrategiesSheetRequest() }
             Button("Projects and Scopes…") { model.scopesSheet = true }
                 .keyboardShortcut("s", modifiers: [.command, .option])
+            Button("New Project…") { model.addProjectRequest = AddProjectRequest() }
+            Menu("Switch Project") {
+                ForEach(Array(model.index.groups.prefix(9).enumerated()), id: \.element.id) { n, g in
+                    Button(g.title) { model.selectGroup(g.id) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(n + 1)")), modifiers: [.command, .control])
+                }
+            }
+            .disabled(model.index.groups.isEmpty)
             Button("Sync") { model.syncEverything() }
                 .keyboardShortcut("r")
             Button("Auto-Tag Everything") { model.autoTagEverything() }
@@ -259,5 +271,27 @@ struct VoiceMenuButton: View {
     var body: some View {
         Button("Talk to \(Brain.name)") { openWindow(id: "voice") }
             .keyboardShortcut("v", modifiers: [.command, .option])
+    }
+}
+
+/// ⌘W: the save group it lives in is replaced above, so Close is put back by hand. A sheet is dismissed as by Esc
+/// (its Cancel button); any other window closes. The main window stays, since closing it would quit Mindmill.
+@MainActor
+enum WindowClosing {
+    static func closeFront() {
+        guard let w = NSApp.keyWindow else { return }
+        if w.sheetParent != nil {
+            let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                       windowNumber: w.windowNumber, context: nil, characters: "\u{1b}",
+                                       charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
+            if let esc { NSApp.sendEvent(esc) }
+            return
+        }
+        if isMain(w) { return }
+        w.performClose(nil)
+    }
+
+    static func isMain(_ w: NSWindow) -> Bool {
+        w.identifier?.rawValue.hasPrefix("main") == true || w.title == "Mindmill" || w.title.hasPrefix("Mindmill —")
     }
 }

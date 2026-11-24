@@ -1,12 +1,11 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
-    /// Claude runs one of the kb:idea skill's actions on an idea, in a Plan session.
+    /// Claude runs one of the mindmill:idea skill's actions on an idea, in a Plan session.
     func ideaSession(_ action: String, _ id: EntryID, display: String) {
-        let title = index.entry(id)?.title ?? id.stem
-        newSession(title: "Idea: \(title)", project: id.project, message: "/kb:idea \(action) \(id.rawValue)",
-                   display: "\(display): \(title)", about: "idea:\(id.rawValue)")
+        engine.ideaSession(action, id, display: display)
     }
 
     func turnIdea(_ id: EntryID, into outcome: IdeaOutcome) {
@@ -41,8 +40,14 @@ extension AppModel {
 struct IdeasView: View {
     @Environment(AppModel.self) private var model
     let project: KBProject
-    @State private var showShelved = false
-    @State private var showDone = false
+    private var showShelved: Bool {
+        get { model.foldStates["ideas.shelved"] ?? false }
+        nonmutating set { model.foldStates["ideas.shelved"] = newValue }
+    }
+    private var showDone: Bool {
+        get { model.foldStates["ideas.done"] ?? false }
+        nonmutating set { model.foldStates["ideas.done"] = newValue }
+    }
 
     var body: some View {
         let every = model.index.entries(project: project.id, section: .ideas).filter { !$0.isDraft }
@@ -160,7 +165,7 @@ struct IdeaBanner: View {
                 }
                 .fixedSize()
                 .disabled(busy)
-                .help("\(Brain.name) drafts them from the idea. Entries wait in the Inbox and backlog items under Waiting to be created until you approve them.")
+                .help("\(Brain.name) drafts them from the idea. Entries wait in the Inbox and backlog items under Suggested backlog items until you approve them.")
                 Button("Research…") {
                     model.newResearchRequest = NewResearchRequest(project: entry.project, target: .entry(entry.id), title: entry.title)
                 }

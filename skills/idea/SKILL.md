@@ -1,6 +1,6 @@
 ---
 name: idea
-description: Brainstorm the user's ideas kept in the KB and grow them into backlog items, facts, decisions, follow-ups, architecture notes or a new KB project. Use for "I have an idea…", "write down this idea", "brainstorm X with me", "turn this idea into PBIs / a project", and when the Mindmill app's Ideas buttons send `/kb:idea <action> …`.
+description: Brainstorm the user's ideas kept in the KB and grow them into backlog items, facts, decisions, follow-ups, architecture notes or a new KB project. Use for "I have an idea…", "write down this idea", "brainstorm X with me", "turn this idea into PBIs / a project", and when the Mindmill app's Ideas buttons send `/mindmill:idea <action> …`.
 allowed-tools: Bash(kb:*), Read, Edit, Grep, Glob
 ---
 
@@ -43,8 +43,8 @@ The user wants it to become something. Read the file and draft from it:
 - **backlog, fact, decision, followup, architecture:** propose each for approval, linked back to the idea:
   `kb inbox add --scope <scope> --section <backlog|facts|decisions|followups|architecture> --proposed-by <id>
   --source <id> --title "…" --summary "…" --reason "<one line>" --body "…"` (backlog items: Description and
-  Acceptance criteria, sized so one person can finish one in a sprint; use the kb:work-item skill's conventions
-  when the scope has a tracker). Check `kb search` first so nothing is proposed twice. Show the list and ask
+  Acceptance criteria, sized so one person can finish one in a sprint; use the mindmill:work-item skill's conventions
+  when the scope has a tracker, `--field parent=<n>` for a parent the idea names and `related` for siblings). Check `kb search` first so nothing is proposed twice. Show the list and ask
   whether it's right before adding when there are more than three.
 - **project:** a new KB project. Ask with choices for what you can't tell: its name, whether it has a repo yet
   (a local path), and its scopes. Then `kb project add --id <slug> --title "<name>"`, `kb scope add --project
@@ -53,7 +53,7 @@ The user wants it to become something. Read the file and draft from it:
 
 Then `kb idea note <id> --kind turned --text "<section>: <id> — <title>"` for each, and `kb idea status <id> done`
 when what the idea was about is fully covered (ask when only part is). Reply with what you proposed and where
-to approve it (Inbox, or Backlog → Waiting to be created).
+to approve it (Inbox, or Backlog → Suggested backlog items).
 
 ## Rules
 

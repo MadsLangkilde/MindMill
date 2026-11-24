@@ -26,7 +26,7 @@ Don't ask again later.
 
 ## Phase 1: Prepare
 
-For a calendar meeting, or when the user wants a prepared file to open in the app, run the `kb:prep`
+For a calendar meeting, or when the user wants a prepared file to open in the app, run the `mindmill:prep`
 skill. It writes the meeting file with `## Prep` and `## Suggested questions`; the user picks questions into
 `## Questions`, and only those are the meeting's (unpicked suggestions are ignored). For a quick prep in chat:
 
@@ -130,8 +130,10 @@ too (an Overview decision that changes Android's code gets `--scopes android`).
 2. Each decision → `kb inbox add --section decisions --proposed-by <meeting id> --reason "<one line>" --source <meeting id> [--supersedes <old id>] …`.
    Check `kb search` first; where it changes an earlier decision, supersede it. Never edit the old body.
 3. Each open question or action item → `kb inbox add --section followups --type question|action --field owner=<who> [--field due=<date>] --field raised_in=<meeting id> …`.
-   **Every** line under `## Action items` gets its own follow-up in the meeting's project, one per line, even
-   when step 5 also proposes a work item for it. Count them: the follow-ups must equal the action items.
+   **Every** line under `## Action items` gets its own follow-up in the meeting's project, one per line, except
+   an action item that only says to create a PBI or bug ("Create an Android PBI for X"): that is a suggested
+   backlog item (step 5), never a follow-up, and `kb` refuses such a follow-up. Count them: the follow-ups plus
+   those backlog items must equal the action items.
 4. Each durable **new** fact → `kb inbox add --section facts …`. Then compare the decisions and answers
    against the project's facts (the index lists them; `kb show` the likely ones): every existing fact they
    may change gets `kb fact challenge <fact id> --by <meeting id> --question "<what may have changed>"`,
@@ -139,9 +141,11 @@ too (an Overview decision that changes Android's code gets `--scopes android`).
    second fact for one that exists, and never edit the fact itself; the user decides on the fact in the app.
 5. Work that clearly needs a PBI or bug → first check it doesn't exist (`kb list --section backlog`,
    `kb tracker items --search "<2–3 keywords>"`); when a work item covers it, write `#<number>` in the action
-   item instead. Otherwise a backlog entry via the `kb:work-item` skill (proposal only),
-   `--source <meeting id>`. This comes *in addition to* the action item's follow-up (step 3), never instead
-   of it; name the backlog entry's id in the follow-up's body.
+   item instead. Otherwise a backlog entry via the `mindmill:work-item` skill (proposal only),
+   `--source <meeting id>`. A parent the notes name (a work item link, `#431006`, "under Feature 431006") goes in
+   `--field parent=<number>`, and items proposed together (one per platform) name each other in `related`
+   (the work-item skill's step 7, Siblings). When the action item is more than creating the item (someone must
+   check, decide or deliver something), keep its follow-up too and name the backlog entry's id in its body.
 6. In a **terminal**: show the filing plan as one short list and ask once. On yes, run
    `kb inbox approve <id>` for each item, then set the meeting to `status: filed`. Approve only what the
    user approved, and reject the rest with `kb inbox reject`.

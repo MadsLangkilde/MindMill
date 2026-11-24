@@ -1,6 +1,6 @@
 # Mindmill remote API
 
-The Mindmill app on a Mac can act as the server for Mindmill on a phone (Android now, iOS later). Everything the phone does goes
+The Mindmill app on a Mac can act as the server for Mindmill on a phone (Android and iPhone). Everything the phone does goes
 through the Mac: the knowledge base, the tracker, sessions, meetings and voice. Turn it on in **Settings → Remote**.
 
 ## Connection
@@ -23,15 +23,19 @@ kb://pair?v=1&hosts=192.168.1.5,100.101.2.3,mac.tail1234.ts.net&port=7878&fp=<sh
 The 6-digit code is valid for 10 minutes and for one phone. The phone connects and sends `pair`:
 
 ```json
-{"id": "1", "method": "pair", "params": {"code": "123456", "name": "Pixel 9"}}
+{"id": "1", "method": "pair", "params": {"code": "123456", "name": "Pixel 9", "platform": "android"}}
 ```
 
 The answer holds the device token, shown once. Store it in the phone's encrypted storage with the hosts, port and
 fingerprint. Every later connection starts with `hello`:
 
 ```json
-{"id": "1", "method": "hello", "params": {"token": "<device token>"}}
+{"id": "1", "method": "hello", "params": {"token": "<device token>", "platform": "android"}}
 ```
+
+`platform` (`android` or `ios`, optional on both) says what the phone can install. The Mac keeps it per phone and
+sends deliveries and review cards for one platform only to phones of that platform; a phone that sends no `platform`
+gets everything, as before.
 
 `pair` fails with `bad_code` and a message to show when the Mac shows no code, the code has expired, or it is wrong.
 After five wrong codes the code stops working and the Mac shows that pairing failed; the user shows a new code. The
@@ -55,7 +59,8 @@ JSON text frames, one message each:
 | Event (Mac → phone) | `{"event": "<name>", "data": {...}}` |
 
 Error codes: `unauthorized`, `bad_code`, `bad_params`, `not_found`, `unknown_method` (the Mac's Mindmill is older than
-the phone's), `failed`.
+the phone's), `unavailable` (the machine can't do it: a feature its platform doesn't have yet, such as meetings on a
+Windows PC; show the message), `failed`.
 
 Binary frames carry audio, screenshots and files: a 4-byte big-endian header length, a JSON header, then the
 payload. Headers:
@@ -63,15 +68,16 @@ payload. Headers:
 | Kind | Header | Payload |
 |---|---|---|
 | Meeting screenshot (phone → Mac) | `{"kind": "screen", "meeting": "<id>", "format": "jpeg", "seq": n}` | JPEG |
-| Voice audio in (phone → Mac, API engine) | `{"kind": "voice", "conversation": "<id>", "format": "pcm16k", "seq": n}` | 16 kHz mono 16-bit little-endian PCM, ~40 ms per frame |
+| Voice audio in (phone → Mac, API engine) | `{"kind": "voice", "conversation": "<id>", "format": "pcm16k", "seq": n}` | 16 kHz mono 16-bit little-endian PCM, ~40 ms per frame. `format` may also be `pcm24k` (24 kHz, what the Windows shell sends); the engine resamples by the header, and a frame without `format` is `pcm16k` |
 | Voice audio out (Mac → phone, API engine) | `{"kind": "voice", "conversation": "<id>", "format": "pcm24k", "seq": n}` | 24 kHz mono 16-bit little-endian PCM |
+| Meeting audio (desktop shell → engine) | `{"kind": "audio", "source": "system"/"microphone", "format": "pcm16k", "seq": n}` | 16 kHz mono 16-bit PCM of the computer's sound, for meeting transcription where the machine's own recognition can't listen to it (Windows); see engine-host.md |
 | File chunk (Mac → phone) | `{"kind": "file", "delivery": "<id>", "seq": n, "last": true/false}` (`seq` starts at 0) | up to 256 KB of the file |
 
 ## Methods
 
 | Method | Params | Result |
 |---|---|---|
-| `hello` | `token` | `name`, `version`, `brain` (the AI's name: Claude, Codex…), `scope`, `scopes[]`, `sections[]` |
+| `hello` | `token` | `name`, `version`, `brain` (the AI's name: Claude, Codex…), `scope` (the Mac's current scope), `scopes[]` (`id, title, project, projectTitle, wide`, in the Mac's order, grouped by project), `sections[]` |
 | `state` | | same as `hello` |
 | `entries.list` | `scope`, `section`, `query?`, `tags?[]`, `limit?` | `entries[]`: `id, section, scope, title, date, summary, tags[], fields{status, kind, owner, due, waiting_on, start, end, work_item, raised_in, proposed_by, reason}` |
 | `entries.search` | `query`, `scope?` | `entries[]` |
@@ -81,10 +87,10 @@ payload. Headers:
 | `inbox.approve` / `inbox.reject` | `ids[]` | `done` |
 | `facts.proposed` | `scope` | `entries[]` |
 | `tracker.items` | `scope`, `mine?` | `me`, `items[]` (as the app's backlog: id, type, title, state, stage, sprint, assignee, tags…) |
-| `sessions.list` | `scope?`, `archived?` (true includes archived ones) | `sessions[]`: `id, title, space (plan/build), role (solo/lead/member/overseer, or assistant for the assistant session), scope, state, busy, updated, count, needsYou, archived, kind?, kindTitle?, origin?, link?`; see [Plan sessions](#plan-sessions) |
-| `session.get` | `id`, `since?` (items already seen) | `session`, `items[]` (`role`: user/assistant/error/status/tool, `text`), `count` |
-| `session.send` | `id`, `text` | `sent` |
-| `session.new` | `space`, `title?`, `scope?`, `message?` | `id` |
+| `sessions.list` | `scope?`, `archived?` (true includes archived ones) | `sessions[]`: `id, title, space (plan/build), role (solo/lead/member/overseer, or assistant for the assistant session), scope, state, busy, updated, count, needsYou, archived, lead? (a member's lead session id: show it under that lead), kind?, kindTitle?, origin?, link?`; see [Plan sessions](#plan-sessions) |
+| `session.get` | `id`, `since?` (items already seen) | `session`, `items[]` (`role`: user/assistant/error/status/tool, `text`), `count`, `denials[]` (what Claude was refused in its last turn, such as `Bash(npm run build)`; empty unless `session.state` is `blocked`) |
+| `session.send` | `id`, `text`, `spoken?` (true: said out loud and the reply will be read aloud) | `sent` |
+| `session.new` | `space`, `title?`, `scope?`, `message?`, `spoken?` (as for `session.send`), `assistant?` (Plan only: an assistant session, as `assistant.open` makes) | `id` |
 | `session.archive` | `id`, `archived` (false takes it out of the archive) | `archived` |
 | `app.structure` | `scope?` | `scope`, `modes[]`; see [App structure](#app-structure) |
 | `kb.run` | `args[]`, `stdin?` | `output`: runs the `kb` command; reaches whatever has no method yet |
@@ -124,6 +130,24 @@ their `kind` section, newest first; the rest go in a folded "Older · n" section
 Archive and unarchive with `session.archive` (`id`, `archived`), which also takes `link:` ids. The `session.archive`
 action does the same for sessions.
 
+### Session replies on the phone
+
+What `session.get` gives is the Mac's transcript as is:
+
+- `tool` items are the steps Claude took, one line each: `<tool>\t<summary>[\t<command>]` (a `Bash` step has Claude's
+  description, then the command). The Mac folds consecutive tool items into one collapsed "steps" row; a user or
+  assistant message starts a new one.
+- An assistant reply that asks the user ends with a fenced ` ```choices ` block (` ```choices multi ` for several
+  answers), one option per line, the recommended one first and marked `(Recommended)`; a ` ```strategy ` block lists
+  strategy slugs the same way. Show the options of the **last** reply as buttons while the session waits for the user
+  (`state: waiting`, not `busy`); a tap sends the option's text, without `(Recommended)`, with `session.send` (several
+  picks joined with `, `; a strategy as `Use the “<title>” strategy (<slug>).` or `No strategy.`). Older replies'
+  options are plain text.
+- `state: blocked` means Claude was refused a tool; `denials[]` says what. The `session.allow` action (`id`) allows it
+  for that session and asks Claude to try again.
+- `spoken: true` on `session.send` and `session.new` (Mac 2026-11-24 and later; older Macs ignore it) asks Claude for
+  a short spoken-style answer. The transcript shows the message as the user said it.
+
 ### App structure
 
 `app.structure` (`scope?`, the current scope when left out) gives the Mac's sidebar for each mode, in the user's
@@ -162,6 +186,36 @@ when some are archived.
 
 The order changes when the user drags rows on the Mac; fetch it again on `index.changed` and when the app comes to
 the front.
+
+### Projects and scopes
+
+A project (such as Acme Go) has **locations**, the folders on the Mac its code lives in, each with a name, and
+**scopes**: one project-wide scope that shows everything in the project, and one per app or part (Android, iOS…).
+A scope works on some of the project's locations (`paths`), can also show other scopes of the project (`includes`),
+and can read other scopes' knowledge without changing their code (`related`). The phone keeps its own current
+scope per Mac; `project.select` (an action) also makes it the Mac's current one.
+
+| Method | Params | Result |
+|---|---|---|
+| `projects.config.get` | | `current` (the Mac's current scope id, or null), `home` (the Mac's home folder), `projects[]`: `{id, title, locations[]{name, path, exists, repository}, scopes[]{id, title, wide, paths[], remotes[], includes[], related[], entries}}`. Paths start with `~` for the home folder |
+| `projects.config.save` | `id?` (none or `""`: a new project), `project{title, newId?, locations[]{name, path}, scopes[]{id?, title, wide?, paths[], remotes?[], includes?[], related?[]}}` | `id` (the project's), `scopes[]` (its scope ids, in order). Fails with `bad_params` and a message to show as is |
+| `folders.list` | `path?` (default `~`) | `path`, `parent` (null at the home folder), `folders[]{name, path, repository}`: the folders in it, hidden ones left out. Only folders under the Mac user's home folder |
+
+Saving:
+- A new project needs a `title` and at least one location. `newId` (a new project only) is its folder id: lowercase
+  letters, digits and dashes, not taken by another project or scope; left out, it comes from the title. A project's
+  id can't change once made. Projects can't be deleted from the phone.
+- A scope without `id` is new; its id comes from its title (or the `id` given, as for `newId`). `paths` must be
+  locations of the project. `includes` names scopes of the same project by id, or a new scope in the same save by
+  its title; `related` names scopes of other projects by id. Keys left out keep their value (a new scope: empty).
+- The project-wide scope covers everything in the project, so leave its `paths` empty; a path another scope works
+  in is dropped from it.
+- Exactly one scope is `wide`; with none, a project-wide scope called Overview is added. Leaving out the old
+  project-wide scope while another is `wide` deletes it, its entries moving to the new one.
+- A scope of an existing project that is left out of `scopes` is **deleted**, and its entries move to the
+  project-wide scope. Ask the user first.
+- The Mac answers with `projects.changed` (and `index.changed`) to every phone, as it does after `project.select`
+  and after any change to projects on the Mac.
 
 ### Actions
 
@@ -206,7 +260,9 @@ when there is none. Then:
 
 When the assistant needs a yes (deleting, stopping, writing to the tracker or GitHub), it asks in its reply; the user
 answers in the chat ("yes"). There is no token on the phone's side here. A "New conversation" button calls
-`assistant.open` with `new: true`.
+`assistant.open` with `new: true`. To start a fresh assistant session only once the user has said something, call
+`session.new` with `space: "plan"`, `assistant: true` and the first `message` instead (Mac 2026-11-24 and later; an
+older Mac makes an ordinary Plan session).
 
 ### Factory editor
 
@@ -306,16 +362,17 @@ The Mac builds and tests what sessions and factories make, and delivers builds a
 
 | Method | Params | Result |
 |---|---|---|
-| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, checklist[]{id, title, status (ok/missing/unknown), help}`; `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `deliveries[]` |
+| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, unavailable?` (why this computer can't deliver it, e.g. an iPhone build on Windows), `checklist[]{id, title, status (ok/missing/unknown), help}`; `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `deliveries[]`; `note?` (none of the scope's repositories is on this computer). A project-wide scope covers its scopes' repositories; the first status of a scope detects its targets |
 | `test.download` | `delivery` | `name, size, sha256, chunks`; then the file arrives as `file` binary frames |
 | `test.installed` | `delivery`, `ok`, `message?` | `noted` |
+| `test.send` | `delivery` | `sent`, `platform?`: the delivery goes again, as the `test.delivery` event, to the phones of its platform (all phones when it has none), with a push to those not connected. For a desktop client, which shows `apk` and `testflight` deliveries but never installs them: its "Send to phone". A review card's build goes with `review.respond` `install` |
 | `preview.get` | `delivery`, `path` | `mime`, `base64`: one file of a preview page; load previews in a web view that fetches every request this way. A backend preview's "try a call" panel asks for `try?method=GET&path=/x&body=…`, which the Mac makes against the local service and answers as text |
 | `review.list` | `scope?` | `cards[]` (as the `review.card` event) |
 | `review.respond` | `card`, `action` (`approve`/`pause`/`change`/`install`), `text?` (for `change`) | `speech` |
 
 | Event | Data | What to do |
 |---|---|---|
-| `test.delivery` | `id, scope, target, kind (apk/url/preview), title, url? (kind url: open it), size?` | `apk`: `test.download`, check the SHA-256, install with the package installer, then `test.installed`. `url`: open in the web view or browser. `preview`: open `preview.get` path `index.html` |
+| `test.delivery` | `id, scope, target, kind (apk/url/preview/testflight), title, url? (kind url: open it), size?, platform? (android/ios)` | `apk`: `test.download`, check the SHA-256, install with the package installer, then `test.installed`. `url`: open in the web view or browser; on an iPhone an `itms-services://` link installs an ad hoc build. `testflight` (iPhones only): the build was uploaded to TestFlight; open the TestFlight app (`url`, else `itms-beta://`). `preview`: open `preview.get` path `index.html` |
 | `review.card` | `id, scope, title, summary, workItem?, session?, factory?, tests{passed, failed, lines[]}, images[]{title, path, before?}, delivery?, actions[]` | Show the card; images load with `preview.get` (`delivery` = the card id) |
 
 ### Meetings
@@ -330,12 +387,28 @@ The Mac builds and tests what sessions and factories make, and delivers builds a
 
 Screenshots during a meeting go as `screen` binary frames; the Mac reads them for the notes.
 
+### Push notifications
+
+An iPhone can't keep the connection open in the background, so the Mac also tells it through Apple's push service
+(APNs) when something needs the user. The Mac holds the APNs key (Settings → Remote: key file, key ID, team ID); the
+phone only sends its device token.
+
+| Method | Params | Result |
+|---|---|---|
+| `push.register` | `token` (APNs device token, hex), `environment` (`sandbox`/`production`), `topic` (the app's bundle id) | `registered`. `token: ""` stops pushes to this phone |
+
+The Mac pushes, to registered phones that aren't connected right now, when a review card is ready, a factory asks a
+question, or a session starts to need the user. The payload's `aps.alert` has a title and body to show; `route` and
+`id` say where tapping it leads (`test`, `factories`, `session` with `id`, `entry` with `id`). A Mac without a key
+answers `push.register` with `registered: false` and a `message`; the phone carries on without push.
+
 ## Events
 
 | Event | Data | What to do |
 |---|---|---|
 | `session.changed` | `id, count, busy, state` | If that session is open, `session.get` with `since` |
 | `index.changed` | | Refresh lists on screen |
+| `projects.changed` | | Projects, locations or scopes changed: `hello` again for `scopes[]`, and refresh an open project editor with `projects.config.get` |
 | `factory.changed` | `id, status` | Refresh factory status (`action.run` `factories.status`) |
 | `meeting.changed` | `meeting, state` | If that meeting is open, `meeting.get` |
 
@@ -354,7 +427,7 @@ described after the tables.
 | `overview` | read | `scope?` | What needs the user now: proposed facts, open follow-ups, their work items, factories and sessions waiting. |
 | `projects.list` | read |  | The user's projects (scopes) and which one is current. |
 | `project.select` | write | `scope` | Make a project the current one on the Mac. |
-| `app.show` | read | `screen`, `id?` | Bring the Mac app to the front on a screen, an entry, a factory or a session. |
+| `app.show` | read | `screen`, `id?` | Bring the Mac app to the front on a screen, an entry, a factory or a session (`ready`: Build's Ready to Start). |
 | `sync.all` | write |  | Sync everything: knowledge base, tracker, pull requests and calendar. |
 
 ### Knowledge
@@ -484,14 +557,34 @@ described after the tables.
 | `workitem.tags.align` | external | `id` (integer), `scope?` | Write a work item's aligned Mindmill tags to the tracker. |
 | `backlog.proposed` | read | `scope?` | Backlog items proposed in the knowledge base, not yet in the tracker. |
 | `backlog.propose` | write | `title`, `details?`, `bug?` (boolean), `source?`, `scope?` | Propose a PBI or bug in the knowledge base (not yet in the tracker). |
-| `backlog.create` | external | `id`, `sprint?` (current/next/none) | Create a proposed backlog item in the tracker. |
+| `backlog.create` | external | `id`, `sprint?` (current/next/none), `parent?` (number or none), `related?` (strings), `not_duplicate?` (boolean) | Create a proposed backlog item in the tracker, linked to its parent (the entry's, else the one its text or source names) and as Related to its `related` items. Refused while it may duplicate an existing item, unless `not_duplicate` (which records it). |
+| `backlog.duplicates` | read | `id?`, `scope?` | Check the proposals waiting to be created against the tracker, created entries and each other: `proposals[]` as in `kb backlog duplicates --json` (`verdict` likely/possible/none, `matches[]`), plus `notes[]`. |
+| `backlog.link` | external | `ids` (strings), `parent?` (number or none), `related?` (strings), `scope?` | Set the parent and Related links of created items (backlog entry ids or work item numbers) in the tracker and the entries; several ids are linked to each other. |
+| `backlog.drop` | external | `id`, `of`, `comment?` (boolean) | Drop a proposal as a duplicate of `of` (a work item number or entry id); `comment` adds its notes to that item first. |
 | `backlog.reject` | destructive | `id` | Reject a proposed backlog item. |
+| `work.startable` | read | `owner?` (me/meAndUnassigned/everyone), `types?` (list of pbi, bug, task), `scope?` | What can be started now: work in the current sprint nobody has started and no session works on. Left out, `owner` and `types` are the filter last used on the Mac for that scope. |
+
+### Sprints
+
+Sprint awareness works for Azure DevOps and Mindmill's own tracker. Jira and other trackers reached through Claude
+show as `reachable: false`, `state: unknown`: Mindmill can't read their sprints, so these actions refuse them and the
+Mac offers a Plan session that reviews the sprint with Claude's connector instead.
+
+| Action | Risk | Params | Does |
+|---|---|---|---|
+| `sprint.status` | read | `scope?` | Each tracker's previous, current and next sprint; whether a new sprint started or the last one ended with none after it; and a sprint review waiting. Without `scope`, every tracker. |
+| `sprint.review` | read | `owner?` (me/meAndUnassigned/everyone, default me), `scope?` | What the previous sprint (or the one whose review is waiting) left unfinished, each item with a suggested decision. |
+| `sprint.apply` | external | `decisions?` (list of `id:action`), `accept_suggestions?` (boolean), `owner?`, `scope?` | Carry out decisions in the tracker. `action` is `done`, `resolved`, `move` (to the new sprint), `backlog`, `remove`, `keep` or `state:<name>`. With `accept_suggestions`, every other item `owner` shows gets its suggestion. Open tasks move with their item and are finished with it. Each item is applied on its own. |
+| `sprint.create` | write | `name?`, `start?`, `finish?` (YYYY-MM-DD), `scope?` | Add the next sprint to Mindmill's own tracker: by default the same length as the last, starting the day after it ends (today if that has passed), its number one up. Azure DevOps answers with where to add it. |
+| `sprint.dismiss` | write | `how` (not_now/done), `scope?` | Put the waiting review off until tomorrow, or mark it done. |
 
 ### Pull Requests
 
 | Action | Risk | Params | Does |
 |---|---|---|---|
 | `prs.list` | read |  | The user's open pull requests: comments, approvals and what blocks completing. |
+| `prs.reviews` | read |  | Pull requests waiting for the user's review: `reviews[]{id, title, repo, url, author, draft, required, project, session?}` (`session`: the review session, once started). |
+| `pr.review` | write | `id` | Start a session that reviews the pull request, or return the one that does: `session`. It asks the user before posting any comment or vote. |
 | `pr.get` | read | `id` (integer) | One pull request with its comment threads. |
 | `pr.comment` | external | `id` (integer), `text` | Post a new comment on a pull request. |
 | `pr.reply` | external | `id` (integer), `thread` (integer), `text`, `resolve?` (boolean) | Reply on a comment thread, and resolve it if asked. |
@@ -556,9 +649,9 @@ described after the tables.
 | Action | Risk | Params | Does |
 |---|---|---|---|
 | `test.status` | read | `scope?` | Testing set-up and the latest test delivery for a project. |
-| `test.detect` | write | `scope?` | Look for what can be tested in a project again (apps, web, services). |
+| `test.detect` | write | `scope?` | Look for what can be tested in a project again (apps, web, services); data `targets[]{id, type, title}`. A project-wide scope covers its scopes' repositories. |
 | `test.check` | write | `scope?` | Check this Mac's tools and the project's compatibility for testing again. |
-| `test.deliver` | write | `target`, `scope?` | Build a test target and deliver it: to the phone, a preview, a link. |
+| `test.deliver` | write | `target`, `scope?`, `session?` (the Build session it comes from) | Build a test target and deliver it: to the phone, a preview, a link. A Build session's "Test" button: the session's `scope`, the targets from `test.status` that are `ready` |
 | `test.server.stop` | destructive | `id` | Stop a running dev server. |
 
 ### Projects
@@ -599,6 +692,11 @@ Lists of entries use the entry summary of `entries.list` (`id, section, scope, t
 | `today.plan` | `day, today[], toDecide[], sideGoal[]`, each `{item, text, done, notRelevant, scope?, ref?}`; tick with `today.check` `item` |
 | `quiz.round` | `questions[]`: `fact, question, answer` (show the question, reveal the answer, then `quiz.answer`) |
 | `backlog.list`, `workitem.search` | `items[]` as in `tracker.items` |
+| `work.startable` | `owner`, `items[]`: `id, kind (pbi/bug/task), title, state, assignee, mine, scope, sprint, parent?` (a task's PBI or bug); start one with `workitem.implement` |
+| `sprint.status` | `trackers[]`: `key, kind, scopes[], reachable, state (running/between/ended/upcoming/none/off/unknown), current?, previous?, next?` (each `{name, path, start, finish}`), `days_since_end?, can_create, create_url, note`; `reviews[]`: `key, sprint, target?` |
+| `sprint.review` | `key, sprint, target?, backlog` (where "no sprint" is), `items[]` as in `tracker.items` plus `suggestion{decision, reason, code}` (`code` is the `sprint.apply` action) |
+| `sprint.apply` | `results[]`: `id, ok, message` |
+| `sprint.create` | `name, path, start, finish` |
 | `prs.list` | `prs[]`: `id, title, repo, repo_id, scope, url, draft, author, source, target, created, merge_status, auto_complete, reviewers[]{name, vote, required, vote_name}, work_items[], open_threads, threads_total, policies[], blockers[], strategies[], keep_branch` (snake case, as `kb pr list --json`; ready to complete when `blockers` is empty) |
 | `pr.get` | the same for one, plus `description` and `threads[]{id, status (active/pending/fixed/wontFix/closed/byDesign), file, line, published, comments[]{id, author, content, date}}` (`file` empty: a general comment) |
 | `factories.status` | `factories[]`: `id, name, status (never/running/paused/windingDown/stopped), progress?, maxParallel, questionsMode, tasks[]{workItem, title, session, milestone?}, questions[]{id, text, options[], workItem?}` |
@@ -611,6 +709,14 @@ Lists of entries use the entry summary of `entries.list` (`id, section, scope, t
 | `people.list` | `people[]`: `name, email` |
 | `settings.get` | `ai{brain, tasks{<task>: {title, provider, model}}, providers[]{id, name, models[]}}`, `voice{engine, provider?, rate, language, bargeIn, confirmsRisky}`, `meetings{language, languages[]{id, name}, microphone, computerAudio}`, `general{appearance, openIn, morning, calendarMinutes}`, `remote{enabled, port, phones[]}` |
 | `test.status`, `test.check` | as the `test.status` method |
+| `test.detect` | `targets[]`: `id, type, title` |
+| `fact.links.suggest` | `suggestions[]`: `id, why, title` (link one with `fact.link`); answered once the brain has looked. The Mac answers at once and shows them beside the fact |
+| `followups.duplicates` | `proposed` (how many merges it proposed; they wait under Follow-ups, `followup.merge` keeps one) |
+| `entry.ask`, `meeting.prepare`, `research.start` | `session` (the Plan session it started; `research.start` also `id`, the research entry). On the Mac `entry.ask` opens the Ask window and `meeting.prepare` the meeting window instead |
+| `entry.move` | `id` (the entry's new id) |
+| `backlog.propose` | `id` (the proposal) |
+| `backlog.create` | `id, url` of the work item (the Mac answers before it is created) |
+| `calendar.upcoming` | as under Meetings on the Mac; `open` is always false where no meeting window exists |
 
 Tasks for `settings.ai`: `work`, `ask`, `meetings`, `voice`, `background`, `calendar`, or `brain` (then `provider`).
 An empty `model` goes back to the default. Turning confirmations off is only possible on the Mac (Settings → Voice).

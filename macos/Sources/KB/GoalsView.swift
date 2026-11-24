@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct GoalSheetRequest: Identifiable, Equatable {
@@ -13,8 +14,7 @@ extension AppModel {
     func newGoal() { goalSheet = GoalSheetRequest(editing: nil) }
 
     func updateGoal(_ goal: Goal, _ change: (inout Goal) -> Void) {
-        do { try Goals.update(goal, change) } catch { errorMessage = error.localizedDescription }
-        reload()
+        do { try engine.plan.updateGoal(goal, change) } catch { errorMessage = error.localizedDescription }
     }
 
     func logGoalProgress(_ goal: Goal, _ text: String) {
@@ -60,40 +60,15 @@ extension AppModel {
     }
 
     func deleteGoal(_ goal: Goal) {
-        do { try Goals.delete(goal) } catch { errorMessage = error.localizedDescription }
-        goalChats.removeValue(forKey: goal.id)?.stop()
-        goalCoachUpdated[goal.id] = nil
+        do { try engine.plan.deleteGoal(goal) } catch { errorMessage = error.localizedDescription }
         if selectedGoalID == goal.id { selectedGoalID = nil }
-        reload()
     }
 
-    func goalChat(_ goal: Goal) -> ClaudeChat {
-        if let c = goalChats[goal.id] { return c }
-        let c = ClaudeChat()
-        c.onEvent = { [weak self] event in
-            if case .turnResult = event { self?.reload() }
-        }
-        goalChats[goal.id] = c
-        return c
-    }
+    func goalChat(_ goal: Goal) -> ClaudeChat { engine.plan.goalChat(goal) }
 
     /// The goal coach: a session that edits the goal file's Suggestions and answers coaching questions.
     func sendToGoalCoach(_ goal: Goal, _ text: String, show: Bool = true) {
-        let chat = goalChat(goal)
-        if !chat.isRunning {
-            guard let launch = launch(prompt: ClaudeModes.goal(goal.id), sessionID: UUID().uuidString.lowercased(), resume: false,
-                                      model: defaultModel, cwd: rootURL) else {
-                errorMessage = claudeMissingExplanation
-                return
-            }
-            do { try chat.start(launch, mode: "goal") } catch {
-                errorMessage = "Could not start claude: \(error.localizedDescription)"
-                return
-            }
-            chat.send(ClaudeModes.warmup, tag: "connect", show: false)
-        }
-        chat.send(text, tag: "goal-\(UUID().uuidString.prefix(6))", show: show)
-        goalCoachUpdated[goal.id] = Date()
+        do { try engine.plan.sendToGoalCoach(goal, text, show: show) } catch { errorMessage = error.localizedDescription }
     }
 }
 
@@ -271,18 +246,15 @@ struct GoalDetailView: View {
 
     private var suggestions: some View {
         let list = goal.suggestions
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Suggestions").font(.headline)
-                Spacer()
-                Button {
-                    model.sendToGoalCoach(goal, "Suggest next steps")
-                } label: {
-                    Label("Suggest Next Steps", systemImage: "sparkles")
-                }
-                .controlSize(.small)
-                .disabled(model.goalChat(goal).isBusy)
+        return FoldBlock(key: "goal.suggestions.\(goal.id)", title: "Suggestions", count: list.questions.isEmpty ? nil : list.questions.count) {
+            Button {
+                model.sendToGoalCoach(goal, "Suggest next steps")
+            } label: {
+                Label("Suggest Next Steps", systemImage: "sparkles")
             }
+            .controlSize(.small)
+            .disabled(model.goalChat(goal).isBusy)
+        } content: {
             if list.questions.isEmpty {
                 Text("Small steps that ride on work you already have. \(Brain.name) suggests them from your meetings, work items and plans.")
                     .font(.callout).foregroundStyle(.secondary)
@@ -313,8 +285,7 @@ struct GoalDetailView: View {
     private var proposedSection: some View {
         let proposed = goal.proposedProgress.items
         if !proposed.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Proposed for Progress").font(.headline)
+            FoldBlock(key: "goal.proposed.\(goal.id)", title: "Proposed for Progress", count: proposed.count) {
                 Text("Things you did that look like progress on this goal. Add them as they are, edit them first, or dismiss them.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(proposed) { item in

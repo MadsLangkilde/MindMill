@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// How "Implement" starts: with questions along the way, or straight through to a pull request.
@@ -11,37 +12,12 @@ enum ImplementMode: String, CaseIterable {
 }
 
 extension AppModel {
-    func refreshMyWork(force: Bool = false) {
-        guard !myWorkLoading else { return }
-        if !force, let at = myWorkFetched, Date().timeIntervalSince(at) < 300 { return }
-        myWorkLoading = true
-        let cli = cli
-        Task {
-            do {
-                let out = try await cli.run(["tracker", "mine", "--json"])
-                myWork = try MyWork.decode(out)
-                myWorkError = nil
-                myWorkFetched = Date()
-                groupSessionsByWork()
-            } catch {
-                myWorkError = error.localizedDescription
-            }
-            myWorkLoading = false
-        }
-    }
+    func refreshMyWork(force: Bool = false) { engine.tracker.refreshMyWork(force: force) }
 
-    func sessions(forKey key: String) -> [WorkSession] {
-        buildSessions.filter { $0.about == key }.sorted { $0.updated > $1.updated }
-    }
-
-    private func repo(of project: String) -> URL {
-        ClaudeLaunch.workingDirectory(project: index.project(project), root: rootURL)
-    }
+    func sessions(forKey key: String) -> [WorkSession] { engine.sessions.sessions(forKey: key) }
 
     /// Whether the project's repo has its own skill with this name.
-    func repoHasSkill(_ name: String, project: String) -> Bool {
-        FileManager.default.fileExists(atPath: repo(of: project).appendingPathComponent(".claude/skills/\(name)/SKILL.md").path)
-    }
+    func repoHasSkill(_ name: String, project: String) -> Bool { engine.sessions.repoHasSkill(name, project: project) }
 
     /// Always asks how: the pace and the strategy. `show` opens the session in Build once it starts;
     /// from Plan it stays hidden, and the Implement button turns into "Implementing…".
@@ -50,78 +26,17 @@ extension AppModel {
     }
 
     func beginImplement(_ item: MyWork.Item, mode: ImplementMode, strategy: Strategy?, show: Bool) {
-        let ref = "work item #\(item.id) (“\(item.title)”)"
-        let hasSkill = repoHasSkill(mode.skill, project: item.project)
-        var message: String
-        if trackerKind(item.project) == "local" {
-            let tracker = LocalTracker.load(scope: item.project, root: rootURL)
-            let brief = tracker.item(item.id).map(tracker.brief) ?? ref
-            let done = "When it is done, move it on with `kb work set \(item.id) --state Done --scope \(item.project)` (and its tasks the same way as you finish them)."
-            message = mode == .fast
-                ? "Implement this end to end: plan, implement with tests, then commit on a new branch and push. I approve the commits and push for it, so keep going without stopping to ask. \(done)\n\n\(brief)"
-                : "Implement this: propose a plan and ask me to approve it with choices, then implement with tests. Ask before committing or pushing. \(done)\n\n\(brief)"
-        } else if hasSkill {
-            message = mode == .fast
-                ? "Run the `\(mode.skill)` skill for \(ref): use the Skill tool with args `\(item.id)`. I approve the branch, commits, push and pull request it makes for this work item, so keep going without stopping to ask."
-                : "Run the `\(mode.skill)` skill for \(ref): use the Skill tool with args `\(item.id)`. Ask me with choices whenever it has a decision for me."
-        } else {
-            message = mode == .fast
-                ? "Implement \(ref) end to end: read it (`kb tracker item \(item.id)`), plan, implement with tests, then commit on a new branch, push and open a pull request linked to it. I approve the commits, push and pull request for this work item, so keep going without stopping to ask."
-                : "Implement \(ref): read it (`kb tracker item \(item.id)`), propose a plan and ask me to approve it with choices, then implement with tests. Ask before committing, pushing or opening a pull request."
-        }
-        if let strategy {
-            message += "\n\n" + ImplementWay.strategyNote(strategy, skill: hasSkill ? mode.skill : nil, fast: mode == .fast)
-        }
-        if let note = markWorkStarted(item.id, scope: item.project, ref: ref) { message = note + "\n\n" + message }
-        newSession(title: "#\(item.id) \(item.title)", project: item.project, message: message,
-                   display: "\(mode.title) #\(item.id): \(item.title)",
-                   model: strategy.flatMap { $0.leadModel.isEmpty ? nil : $0.leadModel },
-                   strategy: strategy, about: item.sessionKey, show: show, space: .build)
-        if !show { notice = "Implementing #\(item.id) in Build. Click Implementing… to open it." }
+        engine.sessions.beginImplement(item, fast: mode == .fast, strategy: strategy, show: show)
     }
 
-    /// Moves the item to its tracker's in-progress state as work starts, so the board shows it. Returns the
-    /// instruction for the session when only Claude can reach the tracker (Jira, GitHub and the like).
     @discardableResult
     func markWorkStarted(_ id: Int, scope: String, ref: String) -> String? {
-        let kind = trackerKind(scope)
-        switch TrackerStart.route(kind: kind) {
-        case .local:
-            editLocalTracker(scope) { $0.start(id) }
-            return nil
-        case .cli:
-            let cli = cli
-            Task {
-                do {
-                    _ = try await cli.run(["tracker", "start", String(id), "--scope", scope])
-                    refreshMyWork(force: true)
-                    refreshTracker(force: true)
-                } catch {
-                    notice = "Could not move #\(id) to in progress: \(error.localizedDescription)"
-                }
-            }
-            return nil
-        case .claude, .none:
-            return TrackerStart.sessionNote(kind: kind, ref: ref)
-        }
+        engine.tracker.markWorkStarted(id, scope: scope, ref: ref)
     }
 
-    /// For an item already under way with no session here: find where it stands.
-    func continueItem(_ item: MyWork.Item) {
-        let pr = item.prs.first.map { " Its pull request is !\($0.id) in \($0.repo)." } ?? ""
-        newSession(title: "#\(item.id) \(item.title)", project: item.project,
-                   message: "Pick up work item #\(item.id) (“\(item.title)”, state \(item.state)).\(pr) Find its branch or worktree and the pull request if there is one, and tell me in a few lines where it stands and what is next. Don't change anything yet.",
-                   display: "Continue #\(item.id): \(item.title)", about: item.sessionKey, space: .build)
-    }
+    func continueItem(_ item: MyWork.Item) { engine.sessions.continueItem(item) }
 
-    func startReview(_ r: MyWork.Review) {
-        let message = repoHasSkill("review-pr", project: r.project)
-            ? "Run the `review-pr` skill for pull request \(r.id) (“\(r.title)” by \(r.author)): use the Skill tool with args `\(r.id)`. Ask me before posting any comment or vote."
-            : "Review pull request \(r.id) (“\(r.title)” by \(r.author), repo \(r.repo)): \(r.url). Summarise what it changes and list findings by severity. Ask me before posting any comment or vote."
-        let learn = " When you're done, propose as facts what the pull request taught you about the codebase, as your instructions say."
-        newSession(title: "Review !\(r.id) \(r.title)", project: r.project, message: message + learn + "\n\n" + ReviewVote.askAtTheEnd(r.id),
-                   display: "Review !\(r.id): \(r.title)", about: r.sessionKey, space: .build)
-    }
+    func startReview(_ r: MyWork.Review) { engine.sessions.startReview(r) }
 
     func openSession(_ s: WorkSession) {
         mode = .build
@@ -171,6 +86,7 @@ struct MyWorkView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if model.buildSelection != AppModel.readyTag { SprintMomentCards() }
                     if let error = model.myWorkError, model.myWork == nil {
                         Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     } else if let work = model.myWork {
@@ -317,6 +233,10 @@ struct MyWorkView: View {
         case .new:
             rows(items(work, .notStarted, currentSprintOnly: sprintOnly),
                  empty: !query.isEmpty ? noMatch : sprintOnly ? "Nothing new in this sprint." : "Nothing waits to be started.")
+            Button("See Everything Ready to Start…") { model.buildSelection = AppModel.readyTag }
+                .buttonStyle(.link)
+                .font(.callout)
+                .help("Everything in the current sprint nobody has started, with a filter for whose and which kinds")
         case .inProgress:
             rows(items(work, .inProgress, currentSprintOnly: sprintOnly),
                  empty: !query.isEmpty ? noMatch : sprintOnly ? "Nothing in progress in this sprint." : "Nothing in progress.")
@@ -499,7 +419,9 @@ struct WorkItemRow: View {
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(session?.crewState.needsUser == true ? 0 : 0.12)))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.orange.opacity(session?.crewState.needsUser == true ? 0.6 : 0)))
         .contextMenu {
-            Button("Open in Azure DevOps") { NSWorkspace.shared.open(URL(string: item.url)!) }
+            if let u = URL(string: item.url), !item.url.isEmpty {
+                Button("Open in \(TrackerLink.name(forURL: item.url))") { NSWorkspace.shared.open(u) }
+            }
             Button("Copy ID") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(String(item.id), forType: .string)
@@ -627,6 +549,8 @@ struct ImplementRequest: Identifiable {
     let id = UUID()
     let item: MyWork.Item
     var show = true
+    /// Nobody has it yet: it is assigned to the user as work starts.
+    var assignToMe = false
 }
 
 /// Asks how to implement a work item: the pace, then the strategy. Strategies have details with a diagram;
@@ -750,6 +674,7 @@ struct ImplementSheet: View {
     private func start() {
         UserDefaults.standard.set(way, forKey: ImplementWay.lastKey)
         lastMode = mode.rawValue
+        if request.assignToMe { model.assignToMe(request.item.id, scope: request.item.project) }
         model.beginImplement(request.item, mode: mode, strategy: model.strategies.first { $0.slug == way }, show: request.show)
         dismiss()
     }

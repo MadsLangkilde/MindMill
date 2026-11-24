@@ -1,2 +1,19 @@
 #!/bin/sh
-exec python3 "$(dirname "$0")/../scripts/kb.py" "$@"
+# Runs scripts/kb.py with Python 3: `python3` on a Mac or Linux. On Windows (Git Bash, which Claude Code uses there)
+# `python3` is often missing or the Microsoft Store stub, so it falls back to `python`, then the `py -3` launcher.
+# KB_PYTHON overrides the choice.
+script="$(dirname "$0")/../scripts/kb.py"
+if [ -n "${KB_PYTHON:-}" ]; then exec "$KB_PYTHON" "$script" "$@"; fi
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    for py in python3 python; do
+      if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import sys; sys.exit(sys.version_info[0] != 3)' >/dev/null 2>&1; then
+        exec "$py" "$script" "$@"
+      fi
+    done
+    if command -v py >/dev/null 2>&1; then exec py -3 "$script" "$@"; fi
+    echo "kb: Python 3 not found. Install it from python.org (tick \"Add python.exe to PATH\") or set KB_PYTHON." >&2
+    exit 127
+    ;;
+esac
+exec python3 "$script" "$@"

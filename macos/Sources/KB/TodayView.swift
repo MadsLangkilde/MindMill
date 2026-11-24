@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// The daily plan across projects. Every item names its project.
@@ -14,6 +15,9 @@ struct TodayView: View {
         VStack(spacing: 0) {
             header
             ListSearchField(key: .today, prompt: "Search today")
+            if model.dailyDate == KBDate.today(), !model.sprintMoments.isEmpty {
+                SprintMomentCards().padding(.horizontal, 14).padding(.bottom, 10)
+            }
             Divider()
             if let plan = model.dailyPlan {
                 let shown = { (items: [DailyPlan.Item]) in items.filter { model.todayShows($0) && (query.isEmpty || $0.matches(query)) } }
@@ -44,12 +48,14 @@ struct TodayView: View {
                         }
                     }
                     if query.isEmpty {
-                        Section("Proposed") {
+                        FoldableSection(isExpanded: model.fold("today.proposed")) {
                             ForEach(plan.proposed, id: \.self) { line in
                                 Text(InlineMarkdown.attributed(line)).font(.callout).foregroundStyle(.secondary)
                             }
-                            WaitingSummary()
+                        } header: {
+                            Text("Proposed")
                         }
+                        Section { WaitingSummary() }
                         if !plan.other.isEmpty {
                             Section("Notes") {
                                 Text(InlineMarkdown.attributed(plan.other)).font(.callout).textSelection(.enabled)
@@ -86,6 +92,7 @@ struct TodayView: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .navigationSubtitle("Today")
+        .task { model.checkSprints() }
     }
 
     private var query: String { model.listQuery(.today) }

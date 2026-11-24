@@ -36,6 +36,22 @@ its scope.
 `<scope-id>/<section>/<file stem>`, for example
 `acme-go/decisions/2026-11-04-network-retry-per-device`. Links between entries use ids.
 
+### Sharing with Windows users
+
+Team knowledge travels through each repository's Git, so the same files must work on macOS and Windows:
+
+- **Names.** No `< > : " / \ | ? *` or control characters, no name ending in a dot or a space, none of Windows'
+  reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, with or without an extension), and no
+  two names in a folder that differ only by case (both Windows and a default Mac volume keep one of them). `kb`'s
+  slugs never produce these; attachments and hand-made files can. `kb lint` lists every such name in the shared,
+  private and team folders.
+- **Line endings.** Files are UTF-8 with LF line endings on every platform; `kb` and the apps always write LF. A team
+  folder `kb` creates in a repository gets a `knowledgebase/.gitattributes` with `* text=auto eol=lf`, so a Windows
+  checkout with `core.autocrlf` doesn't turn shared entries into CRLF. `kb lint` notes team folders without one; add
+  the same line to an existing folder's `.gitattributes` (or the repository's) and commit it with the code.
+- **Paths** in `kb.json` start with `~` and use `/`, which both platforms read; Windows paths under the home folder
+  are written the same way.
+
 ## kb.json
 
 ```json
@@ -45,6 +61,7 @@ its scope.
     {
       "id": "acmego",
       "title": "Acme Go",
+      "locations": [{"name": "Android app", "path": "~/projects/android/contoso-android"}],
       "scopes": [
         {"id": "acme-go", "title": "Product-wide", "wide": true, "paths": [], "remotes": [], "related": []},
         {
@@ -60,6 +77,9 @@ its scope.
 }
 ```
 
+- `locations` (on a project, optional): the folders its code is in, each with a name, as the Mindmill app sets
+  them up. Its scopes' `paths` point at these. A path a scope uses with no location here is shown under the
+  scope's title (or the folder's name when several scopes use it).
 - `wide`: the project-wide scope. Every project has exactly one.
   In the app it lists every entry and work item of its project.
 - `includes`: other scopes of the same project whose entries and work items this scope also lists, such as
@@ -88,6 +108,25 @@ Set up projects and scopes from the CLI (or the Mindmill app):
   (`iOS/Android: …`) or its tags (`tracker.tags`); none means project-wide. Each item lists its `tasks` (id,
   title, state, assignee).
 - `kb tracker task-state <id>... --state <Done|In Progress|New>` moves child tasks to a state.
+- `kb tracker move <id>... --sprint <path|current|next>` or `--backlog`: the iteration path, or no sprint
+  (`tracker.backlog_iteration`, else `tracker.iteration_root`, else the project's root iteration).
+- `kb sprint …` works with sprints whatever the tracker. Every action takes `--scope` (default: this directory's
+  scope); Jira and other trackers reached through Claude stop with a message saying so.
+  - `kb sprint status [--scope S] [--json]`: per tracker (Azure DevOps scopes sharing organization, project and
+    iteration root are one; any other tracker is one per scope): `key, kind, scopes, reachable, state` (`running`,
+    `between`, `ended` with no sprint after it, `upcoming`, `none`, `off`, `unknown`), `current`, `previous`, `next`
+    (`{name, path, start, finish}`), `days_since_end`, `can_create`, `create_url` and a `note`. The previous sprint
+    is the last one finished before the current one starts (before today when none runs).
+  - `kb sprint review [--scope S] [--sprint <path>] [--json]`: what the previous sprint left unfinished (not in a
+    Completed or Removed state), as `kb tracker backlog` items with their tasks, plus `states` (`pbi`, `bug`,
+    `task`, read from the process), `target` (the current sprint, else the next) and `backlog`.
+  - `kb sprint apply [--scope S] --yes [--json]` reads decisions on stdin, `[{"id": 5, "do": "state", "state":
+    "Done", "tasks": [7], "task_state": "Done"}, {"id": 6, "do": "move", "sprint": "<path>", "tasks": [8]},
+    {"id": 9, "do": "backlog"}]`, applies each on its own and prints `results[]` (`id, ok, message`). `tasks` move
+    with a move or backlog, and take `task_state` with a state. Without `--yes` it only prints what would change.
+  - `kb sprint create [--scope S] [--name N] [--start D] [--finish D]`: the next sprint in Mindmill's own tracker,
+    by default as long as the last one, starting the day after it ends (today if that has passed), its number one
+    up. Azure DevOps answers with where to add the iteration instead.
 - `kb tracker mine` and `kb tracker backlog` also list the PBIs and bugs of every scope whose `tracker.kind` is
   `local` (`url` empty, `project`/`scopes` the scope), and need an Azure DevOps PAT only when an Azure DevOps
   tracker exists. For a `jira` or `local` scope the other `kb tracker` actions stop with a message saying where
@@ -270,9 +309,48 @@ pair is not proposed again.
 
 Proposed PBIs and bugs, before they exist in the tracker. Fields: `title` (without the project's title
 prefix, which the tracker settings add), `date`, `kind` (`pbi` | `bug`), `status` (`proposed` | `created` |
-`rejected`), `summary`, `source` (inline list of ids it was derived from), `parent` (tracker id of the
-parent feature), `sprint` (`current` | `next` | `none`), `assignee`, `tags`, `found_in` (bugs),
-`work_item` and `url` (set once created).
+`rejected`), `summary`, `source` (inline list of ids it was derived from), `parent` (work item number of the
+parent feature, epic or PBI; `none` for none), `related` (inline list of work item numbers and backlog entry ids:
+items it belongs with, such as the other platform's twin), `sprint` (`current` | `next` | `none`), `assignee`,
+`tags`, `found_in` (bugs), `work_item` and `url` (set once created), `not_duplicate_of` (inline list of work item
+numbers and entry ids the user said it doesn't duplicate) and `duplicate_of` (set when it was dropped as one).
+
+Whoever writes a proposal (a meeting's filing, a Plan session, the factory, the assistant) sets `parent` when the
+source names one (a link `…/_workitems/edit/431006`, `#431006`, "Feature 431006", "under Feature #431006"), and
+gives proposals written together for the same work each other's ids in `related`.
+
+- `kb backlog create <id>… [--sprint current|next|none] [--parent <n>|none] [--yes]`: creates proposals in the
+  scope's tracker (Azure DevOps, or Mindmill's own for a `local` tracker; a Jira scope stops with a message), one
+  after the other. The parent is `--parent`, else the entry's `parent`, else the one the entry's text names
+  (`Parent: Feature #431006`) or, failing that, the one its source entries clearly name ("under Feature #N",
+  "Feature here: <link>"; timestamped transcript and screen lines don't count, and several candidates mean none),
+  else `tracker.default_parent` when the entry has no `parent` at all. An inferred parent is printed with where it
+  came from (`parent_from` in the dry run). Related items become `System.LinkTypes.Related` links: numbers as
+  they are, entry ids once those entries are created, and created entries whose `related` names this one; entries
+  not created yet are linked when they are. Afterwards the entries hold work item numbers in `parent` and
+  `related`, both ways. A local tracker keeps `related` on both items in `work.json`. Without `--yes` it only
+  prints what would be posted (exit 2).
+- `kb backlog link <entry or number>… [--parent <n>|none] [--related <n or entry>…] [--scope <id>] [--yes]`:
+  repairs links of items already created, in the tracker and the entries. Without `--parent` an entry's own or
+  inferred parent is used. Several targets are linked as related to each other. A target still proposed only gets
+  the fields. A different existing parent is replaced. Without `--yes` it prints the plan (exit 2).
+- `kb backlog duplicates [--scope <id>] [--entry <id>]… [--offline] [--json]`: checks proposals waiting to be
+  created. Candidates: the tracker's PBIs and bugs in the scopes' areas that are open or were changed or created
+  in the last 60 days, those whose title has the proposal's two longest words, the children of its parent; created
+  backlog entries; and the other proposals. Only the proposal's own scope counts, or the project-wide scope of the
+  same project (the other platform's twin is never a duplicate); its parent, related items and `not_duplicate_of`
+  are skipped. The score is the overlap (Dice) of title words without common words, verbs like show/fix/add and
+  plurals; with a description on both sides 0.7 × title + 0.3 × title-and-text; plus 0.1 for the same parent and
+  0.15 when the proposal names the item's number. One shared title word alone stays below possible. Likely from
+  0.75, possible from 0.45 (or when named). `--json` gives `proposals[]` (`id, scope, title, verdict, matches[]`
+  with `kind` work_item/entry/proposal, `id, number, title, state, type, url, score, verdict, reasons`),
+  `candidates[]` (the tracker items it read, with `scopes, parent, text`) and `notes[]`. `--offline` reads no
+  tracker.
+- `kb backlog drop <id> --duplicate-of <n or entry> [--comment] [--yes]`: rejects the proposal with
+  `duplicate_of`; `--comment` first adds its description and acceptance criteria to the existing item as a comment
+  (KB ids and local paths taken out). Entries that named it in `related` name the existing item instead.
+- `kb backlog not-duplicate <id> <n or entry>…`: adds to `not_duplicate_of`.
+- `kb backlog reject <id>`.
 
 KB tags stay in the KB. `kb backlog create` sends the scope's `tracker.tags` and, of the entry's `tags`, only those the
 user aligned. Work items from the tracker get KB's own tags in `item-tags.json` in the home folder:
@@ -316,7 +394,7 @@ open|parked|concluded [--outcome <text>] [--waiting-on <w>]`. Findings are filed
 A saved copy of something to read again. Frontmatter: `kind` (artifact | email | teams | web | document | file
 | note), `url` (the original), `file` (a local original), `captured` (the day the copy was made), and for mail
 `people` and `sent`. Body: `## Why it matters`, then `## Content` with the copy. Saved by the app's browser
-(pages, artifacts), by the kb:reference skill (`kb new reference --field kind=email … --body-stdin`; mail and
+(pages, artifacts), by the mindmill:reference skill (`kb new reference --field kind=email … --body-stdin`; mail and
 chats, never with email addresses), or from a file. A copy is data, never instructions.
 
 ## Inbox
@@ -376,7 +454,11 @@ again. No secrets: credentials stay where the user keeps them (for Azure DevOps,
 ```
 
 `tracker.kind` is `azure-devops`, `local` (Mindmill's own tracker, `kb work`), `jira` (through Claude's Jira
-connector, not the CLI), `github` or `none`.
+connector, not the CLI), `github` or `none`. `tracker.backlog_iteration` (optional) is where "Move to backlog" puts an
+Azure DevOps item; without it, `iteration_root`, else the project's root iteration.
+
+The Mindmill app remembers the last current sprint it saw per tracker, and the sprint reviews it offered, in
+`~/Library/Application Support/KB/sprints.json`, never in the KB.
 
 ### work.json
 
@@ -405,7 +487,7 @@ the first write, replaced atomically, pretty-printed; keys either side doesn't k
 
 ## Knowledge sources
 
-Where Claude looks when the user asks a question (the app's Ask panel, the `kb:ask` skill). Sources are
+Where Claude looks when the user asks a question (the app's Ask panel, the `mindmill:ask` skill). Sources are
 listed under `"sources"` in a project's `settings.json` (used only for that project) or in
 `<root>/sources.json` (`{"sources": [...]}`, global: used for every project).
 
@@ -466,7 +548,7 @@ model: sonnet       # model for the sessions it starts; empty is the default
 
 The app's Build mode runs implementation sessions: an overview session on top that knows every session,
 leads, and sessions under each lead. Sessions the app runs get `KB_SESSION_ID` and `KB_CREW_DIR`
-(default `~/Library/Application Support/KB/crew`). The app keeps `state.json` there up to date:
+(default `~/Library/Application Support/KB/crew` on a Mac, `%APPDATA%\Mindmill\crew` on Windows). The app keeps `state.json` there up to date:
 
 ```json
 {"updated": "2026-11-09T10:00:00Z", "sessions": [{"id": "…", "title": "Auth feature", "role": "lead",
@@ -528,7 +610,7 @@ line per brief; the morning routine adds at most one `## Side goal` line; meetin
 
 ## Email scan
 
-`kb:email` reads mail received since the last scan and proposes reminders (`status: proposed`) only for what
+`mindmill:email` reads mail received since the last scan and proposes reminders (`status: proposed`) only for what
 needs the user: courses with deadlines, direct asks, approvals and forms. It skips newsletters, marketing and
 tool notifications. `email.json` at the KB root keeps the state:
 

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import KBCore
+import KBEngine
 
 /// Handlers for the app itself: navigation, meetings run on the Mac, and settings.
 extension AppModel {
@@ -12,12 +13,8 @@ extension AppModel {
         a.register("project.select") { [unowned self] p in
             let scope = try scopeParam(p)
             selectProject(scope)
+            remoteProjectsChanged()
             return ActionResult("\(index.project(scope)?.title ?? scope) is the current project now.")
-        }
-
-        a.register("app.show") { [unowned self] p in
-            try show(screen: p["screen"]?.string ?? "", id: p["id"]?.string)
-            return ActionResult("It's on the Mac's screen now.", data: ["screen": p["screen"] ?? .null])
         }
 
         a.register("app.mode") { [unowned self] p in
@@ -34,15 +31,9 @@ extension AppModel {
 
         a.register("calendar.upcoming") { [unowned self] p in
             let days = max(1, min(14, p["days"]?.int ?? 1))
-            let from = KBDate.today()
-            let to = KBDate.today(Calendar(identifier: .gregorian).date(byAdding: .day, value: days - 1, to: Date()) ?? Date())
             let scopes = try p["scope"]?.string.map { [try scopeParam(["scope": .string($0)])] } ?? index.projects.map(\.id)
-            let events = scopes.flatMap { index.entries(project: $0, section: .meetings) }
-                .filter { $0.date >= from && $0.date <= to && !$0.isDraft }
-                .sorted { ($0.date, $0.field("start") ?? "") < ($1.date, $1.field("start") ?? "") }
-            let now = MeetingController.clock(Date())
-            let next = events.first { $0.meetingStatus == .live }
-                ?? events.first { $0.meetingStatus != .cancelled && ($0.date > from || ($0.field("end") ?? $0.field("start") ?? "99:99") >= now) }
+            let (events, next) = engine.upcomingMeetings(days: days, scopes: scopes)
+            let from = KBDate.today()
             let speech: String
             if let next {
                 let when = next.meetingStatus == .live ? "running now" : next.date == from ? "at \(next.field("start") ?? "a time not set")" : "on \(next.date) at \(next.field("start") ?? "?")"
@@ -52,15 +43,6 @@ extension AppModel {
             }
             return ActionResult(speech, data: ["events": .array(events.map(meetingEventJSON)),
                                                "next": next.map { .string($0.id.rawValue) } ?? .null])
-        }
-
-        a.register("meeting.create") { [unowned self] p in
-            let scope = try scopeParam(p)
-            let date = Self.day(p["date"]?.string)
-            let doc = try MeetingFile.create(project: scope, title: p["title"]?.string ?? "Meeting", date: date,
-                                             start: p["start"]?.string ?? "", attendees: p["attendees"]?.strings ?? [], root: rootURL)
-            reload()
-            return ActionResult("Planned it for \(date)\(p["start"]?.string.map { " at \($0)" } ?? "").", data: ["meeting": .string(doc.id.rawValue)])
         }
 
         a.register("meeting.prepare") { [unowned self] p in
@@ -153,69 +135,12 @@ extension AppModel {
         // MARK: Settings
 
         a.register("settings.get") { [unowned self] _ in
-            let d = UserDefaults.standard
-            let voice = VoicePreferences.load()
-            var tasks: [String: JSONValue] = [:]
-            for t in AITask.allCases {
-                tasks[t.rawValue] = ["title": .string(t.title), "provider": .string(aiSetup.provider(for: t).id), "model": .string(model(for: t))]
-            }
-            return ActionResult("The brain is \(aiSetup.brainProvider.name); sessions use \(model(for: .work).isEmpty ? "the default model" : model(for: .work)).", data: [
-                "ai": ["brain": .string(aiSetup.brain), "tasks": .object(tasks),
-                       "providers": .array(AIProvider.all.filter(\.supported).map { ["id": .string($0.id), "name": .string($0.name),
-                                                                                     "models": .array($0.models.map(JSONValue.string))] })],
-                "voice": ["engine": .string(voice.engine.rawValue), "provider": voice.provider.map(JSONValue.string) ?? .null,
-                          "rate": .number(voice.rate), "language": .string(voice.language), "bargeIn": .bool(voice.bargeIn),
-                          "confirmsRisky": .bool(voice.confirmsRisky)],
-                "meetings": ["language": .string(d.string(forKey: AppSettingsKeys.transcriptLanguage) ?? LiveTranscriber.auto),
-                             "languages": .array(LiveTranscriber.languages.map { ["id": .string($0.id), "name": .string($0.name)] }),
-                             "microphone": .bool(d.object(forKey: AppSettingsKeys.transcriptMicrophone) as? Bool ?? true),
-                             "computerAudio": .bool(d.object(forKey: AppSettingsKeys.transcriptComputerAudio) as? Bool ?? true)],
-                "general": ["appearance": .string(d.string(forKey: AppSettingsKeys.appearance) ?? "system"),
-                            "openIn": .string(d.string(forKey: AppSettingsKeys.launchMode) ?? ""), "morning": .bool(autoMorning),
-                            "calendarMinutes": .number(Double(calendarMinutes))],
-                "remote": ["enabled": .bool(d.bool(forKey: RemoteServer.enabledKey)), "port": .number(Double(remote.port)),
-                           "phones": .array(remote.devices.devices.map { .string($0.name) })],
-            ])
+            ActionResult("The brain is \(aiSetup.brainProvider.name); sessions use \(model(for: .work).isEmpty ? "the default model" : model(for: .work)).",
+                         data: engine.settingsData(meetingLanguages: LiveTranscriber.languages.map { ($0.id, $0.name) },
+                                                   defaultLanguage: LiveTranscriber.auto, morning: autoMorning,
+                                                   calendarMinutes: calendarMinutes))
         }
 
-        a.register("settings.ai") { [unowned self] p in
-            let task = p["task"]?.string ?? ""
-            let modelName = (p["model"]?.string ?? "").trimmingCharacters(in: .whitespaces)
-            if task == "brain" {
-                let id = p["provider"]?.string ?? modelName
-                guard let provider = AIProvider.with(id: id), provider.supported else {
-                    throw ActionError("The brain can be " + Self.list(AIProvider.all.filter(\.supported).map(\.name), or: true) + ".")
-                }
-                aiSetup.brain = provider.id
-                return ActionResult("The brain is \(provider.name) now.")
-            }
-            guard let t = AITask(rawValue: task) else { throw ActionError("Which task?") }
-            if modelName.isEmpty {
-                aiSetup.tasks[t] = nil
-                return ActionResult("\(t.title) uses the default model now.")
-            }
-            let providerID = p["provider"]?.string ?? aiSetup.brain
-            guard let provider = AIProvider.with(id: providerID), provider.supported else { throw ActionError("I don't know the provider \(providerID).") }
-            guard provider.models.contains(modelName) else {
-                throw ActionError("\(provider.name) has " + Self.list(provider.models, or: true) + ".")
-            }
-            aiSetup.tasks[t] = .init(provider: provider.id, model: modelName)
-            return ActionResult("\(t.title) uses \(modelName) now.")
-        }
-
-        a.register("settings.voice") { [unowned self] p in
-            var prefs = VoicePreferences.load()
-            if let e = p["engine"]?.string.flatMap(VoiceEngineKind.init(rawValue:)) {
-                if e == .api, prefs.provider == nil { throw ActionError("Add a real-time API key in Settings → Voice on the Mac first.") }
-                prefs.engine = e
-            }
-            if case .number(let r)? = p["rate"] { prefs.rate = min(2, max(0.5, r)) }
-            if let l = p["language"]?.string { prefs.language = l }
-            if let b = p["barge_in"]?.bool { prefs.bargeIn = b }
-            prefs.save()
-            actions.confirmsRisky = prefs.confirmsRisky
-            return ActionResult("Changed the voice settings.")
-        }
 
         a.register("settings.meetings") { [unowned self] p in
             let d = UserDefaults.standard
@@ -274,6 +199,10 @@ extension AppModel {
             front()
             mode = .build
             buildSelection = nil
+        case "ready":
+            front()
+            mode = .build
+            buildSelection = AppModel.readyTag
         case "factory":
             front()
             showFactory(try factoryParam(["factory": .string(id ?? "")]).id)
@@ -328,13 +257,7 @@ extension AppModel {
         return pick
     }
 
-    func meetingEventJSON(_ e: KBEntry) -> JSONValue {
-        ["id": .string(e.id.rawValue), "title": .string(e.title), "scope": .string(e.project), "date": .string(e.date),
-         "start": .string(e.field("start") ?? ""), "end": .string(e.field("end") ?? ""),
-         "attendees": .array(e.listField("attendees").map(JSONValue.string)),
-         "online": e.field("online_url").map(JSONValue.string) ?? .null,
-         "status": .string((e.meetingStatus ?? .scheduled).rawValue), "open": .bool(meetingControllers[e.id] != nil)]
-    }
+    func meetingEventJSON(_ e: KBEntry) -> JSONValue { engine.meetingEventJSON(e, open: meetingControllers[e.id] != nil) }
 
     static func stageName(_ s: MeetingController.Stage) -> String {
         switch s {

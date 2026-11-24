@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Under the transcript header: pick a window or screen (or an area of it) for KB to read along with, or what it is

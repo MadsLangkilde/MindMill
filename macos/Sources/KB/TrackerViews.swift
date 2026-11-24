@@ -1,29 +1,12 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
     /// Fetches every PBI and bug from the trackers. Skipped when fetched in the last two minutes, unless forced.
-    func refreshTracker(force: Bool = false) {
-        startTrackerTimer()
-        guard !trackerLoading else { return }
-        if !force, let at = trackerFetched, Date().timeIntervalSince(at) < 120 { return }
-        trackerLoading = true
-        if pullRequests == nil { refreshPullRequests() }
-        let cli = cli
-        Task {
-            do {
-                let out = try await cli.run(["tracker", "backlog", "--json"])
-                tracker = try TrackerBacklog.decode(out)
-                trackerError = nil
-                trackerFetched = Date()
-            } catch {
-                trackerError = error.localizedDescription
-            }
-            trackerLoading = false
-        }
-    }
+    func refreshTracker(force: Bool = false) { engine.tracker.refreshBacklog(force: force) }
 
-    /// Every ten minutes while the app is in front: the tracker and My Work.
+    /// Every ten minutes while the app is in front: the tracker and My Work; the sprints at most hourly.
     func startTrackerTimer() {
         guard trackerTimer == nil else { return }
         trackerTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
@@ -32,6 +15,7 @@ extension AppModel {
                 if self.tracker != nil || self.trackerError != nil { self.refreshTracker(force: true) }
                 if self.myWork != nil { self.refreshMyWork(force: true) }
                 if self.pullRequests != nil { self.refreshPullRequests(force: true) }
+                self.checkSprints()
             }
         }
     }
@@ -40,6 +24,7 @@ extension AppModel {
     func syncEverything() {
         reload()
         refreshTracker(force: true)
+        checkSprints(force: true)
         if mode == .build || myWork != nil { refreshMyWork(force: true) }
         if mode == .build || pullRequests != nil { refreshPullRequests(force: true) }
         if !calendar.isRunning, !morning.isBusy, backgroundStarted { syncCalendar() }
@@ -335,7 +320,7 @@ struct TrackerItemRow: View {
         .onTapGesture { model.selectWorkItem(item.id) }
         .contextMenu {
             if let u = URL(string: item.url) {
-                Button("Open in Azure DevOps") { NSWorkspace.shared.open(u) }
+                Button("Open in \(TrackerLink.name(forURL: item.url))") { NSWorkspace.shared.open(u) }
                 Button("Copy Link") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(item.url, forType: .string)
@@ -732,8 +717,14 @@ private struct BacklogList: View {
     let items: [TrackerBacklog.Item]
     let sprintPicked: Bool
     let query: String
-    @State private var showRejected = false
-    @State private var showDone = false
+    private var showRejected: Bool {
+        get { model.foldStates["backlog.rejected"] ?? false }
+        nonmutating set { model.foldStates["backlog.rejected"] = newValue }
+    }
+    private var showDone: Bool {
+        get { model.foldStates["backlog.done"] ?? false }
+        nonmutating set { model.foldStates["backlog.done"] = newValue }
+    }
 
     var body: some View {
         let searching = !query.isEmpty
@@ -742,13 +733,15 @@ private struct BacklogList: View {
         let all = everything.filter { !$0.isDraft }
         let prefix = model.settings(for: project.id).tracker.titlePrefix
         let proposed = all.filter { $0.backlogStatus == .proposed }
+        let findings = model.duplicateFindings(for: proposed)
+        let suggested = proposed.filter { findings[$0.id]?.alreadyCreated == nil }
         let known = Set(model.trackerItems(scope: project.id).map(\.id))
         let created = all.filter { $0.backlogStatus == .created && !known.contains(Int($0.field("work_item") ?? "") ?? -1) }
         let rejected = all.filter { $0.backlogStatus == .rejected }
         List(selection: model.entrySelection) {
             DraftsSection(drafts: everything.filter(\.isDraft))
             if !proposed.isEmpty {
-                ProposedRow(count: proposed.count)
+                ProposedRow(count: suggested.count)
             }
             let loose = items.filter(\.hasLooseTasks)
             if !loose.isEmpty {
@@ -767,7 +760,7 @@ private struct BacklogList: View {
                 }
             }
             if !rejected.isEmpty {
-                FoldableSection(isExpanded: $showRejected) {
+                FoldableSection(isExpanded: model.fold("backlog.rejected")) {
                     ForEach(rejected) { BacklogCard(entry: $0, prefix: prefix).tag($0.id).entryContextMenu($0.id) }
                 } header: {
                     Text("Rejected · \(rejected.count)")
@@ -877,7 +870,7 @@ struct WorkItemDetailView: View {
                             .menuStyle(.borderlessButton)
                             .fixedSize()
                             .disabled(busy)
-                            .help("Set the state in Azure DevOps")
+                            .help("Set the state in \(TrackerLink.name(forURL: item.url))")
                     }
                     GridRow {
                         Text("Sprint").foregroundStyle(.secondary)
@@ -932,7 +925,7 @@ struct WorkItemDetailView: View {
                 }
                 HStack(spacing: 8) {
                     if let u = URL(string: item.url) {
-                        Link(destination: u) { Label("Open in Azure DevOps", systemImage: "arrow.up.right.square") }
+                        Link(destination: u) { Label("Open in \(TrackerLink.name(forURL: item.url))", systemImage: "arrow.up.right.square") }
                         CopyButton(label: "Copy Link", text: item.url)
                     }
                 }
@@ -981,7 +974,7 @@ private struct ProposedRow: View {
         let selected = model.showProposedBacklog
         HStack(spacing: 8) {
             Image(systemName: "tray.full").foregroundStyle(selected ? Color.white : Color.accentColor)
-            Text("Waiting to be created").fontWeight(.medium)
+            Text("Suggested backlog items").fontWeight(.medium)
             Text("\(count)")
                 .font(.caption.weight(.semibold).monospacedDigit())
                 .frame(minWidth: 18, minHeight: 18)
@@ -995,7 +988,7 @@ private struct ProposedRow: View {
         .background(selected ? Color.accentColor : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .onTapGesture { model.showProposed() }
-        .help("PBIs and bugs waiting to be created in Azure DevOps")
+        .help("PBIs and bugs suggested from meetings, sessions and ideas, waiting for you to create them")
         .listRowSeparator(.hidden)
     }
 }
@@ -1008,14 +1001,17 @@ struct ProposedBacklogView: View {
     var body: some View {
         let waiting = model.index.entries(project: project.id, section: .backlog)
             .filter { !$0.isDraft && $0.backlogStatus == .proposed }
-        let proposed = model.tagFiltered(waiting, .backlog)
+        let findings = model.duplicateFindings(for: waiting)
+        let shown = model.tagFiltered(waiting, .backlog)
+        let proposed = shown.filter { findings[$0.id]?.alreadyCreated == nil }
+        let covered = shown.filter { findings[$0.id]?.alreadyCreated != nil }
         let prefix = model.settings(for: project.id).tracker.titlePrefix
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 TagFilterBar(key: .backlog, available: waiting.map(\.tags), inset: 0)
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Waiting to be created").font(.title2.weight(.semibold))
-                    Text("\(proposed.count) for Azure DevOps").foregroundStyle(.secondary)
+                    Text("Suggested backlog items").font(.title2.weight(.semibold))
+                    Text("\(proposed.count) for \(model.trackerName(project.id))").foregroundStyle(.secondary)
                     Spacer()
                     if proposed.count > 1 {
                         Button("Create All…") { model.backlogBatchRequest = BacklogBatchRequest(entries: proposed.map(\.id)) }
@@ -1024,17 +1020,67 @@ struct ProposedBacklogView: View {
                     }
                 }
                 if proposed.isEmpty {
-                    Text("Nothing waits. New proposals come from meetings, sessions and the + button.")
+                    Text("No suggestions. New ones come from meetings, sessions and the + button.")
                         .foregroundStyle(.secondary)
                 }
+                if !waiting.isEmpty {
+                    DuplicateCheckStatus(scope: project.id)
+                }
                 ForEach(proposed) { e in
-                    ProposedCard(entry: e, prefix: e.project == project.id ? prefix : model.settings(for: e.project).tracker.titlePrefix)
+                    ProposedCard(entry: e, prefix: e.project == project.id ? prefix : model.settings(for: e.project).tracker.titlePrefix,
+                                 finding: findings[e.id])
+                }
+                if !covered.isEmpty {
+                    DisclosureGroup(isExpanded: model.fold("backlog.covered")) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ForEach(covered) { e in
+                                ProposedCard(entry: e, prefix: e.project == project.id ? prefix : model.settings(for: e.project).tracker.titlePrefix,
+                                             finding: findings[e.id])
+                            }
+                        }
+                        .padding(.top, 8)
+                    } label: {
+                        Text("Probably already created (\(covered.count))").font(.headline)
+                            .help("Something very like these exists already. Drop each, or say it isn't the same, to bring it back.")
+                    }
                 }
             }
             .padding(22)
             .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .task(id: project.id + "|" + waiting.map(\.id.rawValue).joined(separator: ",")) { model.checkDuplicates(scope: project.id) }
+    }
+}
+
+/// Whether the proposals were checked against the tracker for items that already exist, and a way to check again.
+private struct DuplicateCheckStatus: View {
+    @Environment(AppModel.self) private var model
+    let scope: String
+
+    var body: some View {
+        let checking = model.duplicateChecking.contains(scope)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if checking {
+                ProgressView().controlSize(.small)
+                Text("Looking for items that already exist…")
+            } else if let error = model.duplicateErrors[scope] {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("Couldn't search the tracker for duplicates: \(error)")
+            } else if let at = model.duplicateChecked[scope] {
+                Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
+                Text("Checked for duplicates in the tracker \(at.formatted(.relative(presentation: .named))).")
+            } else {
+                Text("Proposals are checked for items that already exist.")
+            }
+            if !checking {
+                Button("Check Again") { model.checkDuplicates(scope: scope, force: true) }
+                    .buttonStyle(.link)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -1042,6 +1088,7 @@ private struct ProposedCard: View {
     @Environment(AppModel.self) private var model
     let entry: KBEntry
     let prefix: String
+    let finding: DuplicateFinding?
     @State private var expanded = false
 
     var body: some View {
@@ -1082,8 +1129,14 @@ private struct ProposedCard: View {
                 }
                 .font(.caption)
             }
+            BacklogLinksRow(entry: entry)
+            if let finding, finding.verdict != .none {
+                DuplicateBox(entry: entry, finding: finding)
+            }
             HStack(spacing: 10) {
-                Button("Create in Azure DevOps…") { model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id) }
+                Button(BacklogBatchCreateSheet.createLabel(model.settings(for: entry.project).tracker.kind) + "…") {
+                    model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id)
+                }
                     .buttonStyle(.borderedProminent)
                 Button("Edit") {
                     model.openNow(entry.id)
@@ -1269,5 +1322,37 @@ struct LooseTasksView: View {
             .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// The session header's work item: open it in the scope's tracker (or under Backlog for Mindmill's own), or copy
+/// its link.
+struct WorkItemHeaderButton: View {
+    @Environment(AppModel.self) private var model
+    let item: String
+    let scope: String
+
+    var body: some View {
+        let url = model.workItemURL(item, project: scope)
+        let local = model.settings(for: scope).tracker.kind == "local"
+        Menu {
+            if local, let n = Int(item) {
+                Button("Show in Backlog") { model.showLocalItem(n, project: scope) }
+            } else if let url {
+                Button("Open in \(model.trackerName(scope))") { NSWorkspace.shared.open(url) }
+                Button("Copy Link") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                }
+            } else {
+                Text("The tracker settings don't say where \(model.trackerName(scope)) is.")
+                Button("Tracker Settings…") { model.projectSettingsRequest = ProjectSettingsRequest(project: scope) }
+            }
+        } label: {
+            Label(Int(item) != nil ? "#\(item)" : item, systemImage: "list.bullet.rectangle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("See the work item in \(model.trackerName(scope))")
     }
 }

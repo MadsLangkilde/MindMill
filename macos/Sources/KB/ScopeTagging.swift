@@ -1,5 +1,6 @@
 import Foundation
 import KBCore
+import KBEngine
 
 /// Which entries the background tagger has scoped, and which ones the user scoped by hand (never touched again).
 struct ScopeTagState: Equatable {
@@ -13,7 +14,7 @@ struct ScopeTagState: Equatable {
 
 extension AppModel {
     private var scopeTagURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KB/scopetags.json")
+        AppPaths.file("scopetags.json")
     }
 
     /// The text that decides an entry's scopes; its own `scopes` field is left out so tagging doesn't retrigger.
@@ -119,19 +120,11 @@ extension AppModel {
 
     /// Adds or removes one scope on several entries, as the user's own choice.
     func changeScope(_ scope: String, on ids: Set<EntryID>, add: Bool) {
-        let cli = cli
-        let targets = ids.filter { id in
-            guard let e = index.entry(id), id.project != scope, index.group(of: id.project)?.scopes.contains(scope) == true else { return false }
-            return add != e.isIn(scope: scope)
-        }
+        let targets = engine.scopeTargets(scope, on: Array(ids), add: add)
         guard !targets.isEmpty else { return }
-        markScopesManual(Array(targets))
+        markScopesManual(targets)
         Task {
-            var failures: [String] = []
-            for id in targets {
-                do { try await cli.run(["scopes", id.rawValue, add ? "--add" : "--remove", scope]) } catch { failures.append(error.localizedDescription) }
-            }
-            reload()
+            let failures = await engine.changeScope(scope, on: targets, add: add)
             let title = index.project(scope)?.title ?? scope
             if failures.isEmpty {
                 notice = "\(add ? "Added" : "Removed") \(title) \(add ? "to" : "from") \(targets.count) entr\(targets.count == 1 ? "y" : "ies")."

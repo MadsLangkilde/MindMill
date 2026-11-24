@@ -45,7 +45,7 @@ to-do): `kb inbox add --project <p> --section facts|decisions --proposed-by emai
 **A discussion** (several people going back and forth about something in a registered project that isn't
 settled: a design question, a requirement, a disagreement, an open problem) is tracked, not turned into a
 reminder. `kb discussion list --all-projects --json` shows the open ones with their `thread`:
-- the thread is already tracked: add the new messages' points to it as the kb:discussion skill's `refresh` does
+- the thread is already tracked: add the new messages' points to it as the mindmill:discussion skill's `refresh` does
   (`kb discussion note <id> --who … --date … --text …`, `--kind question|finding`, `--waiting-on`);
 - it is new: create it as the skill's `start` step 3–4 does, in the scope it belongs to (`--cross-project` when
   needed), with `channel=email`, `thread=<conversation id>` and `link=<webLink>`.

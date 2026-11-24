@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct DetailView: View {
@@ -441,6 +442,17 @@ struct EntryHeader: View {
     private var followupRows: some View {
         let fm = model.document?.frontmatter ?? doc.frontmatter
         let status = FollowupStatus(rawValue: fm.string("status") ?? "open") ?? .open
+        if status == .open, BacklogFollowup.workTitle(fm.string("title") ?? "") != nil {
+            GridRow {
+                FieldLabel("Backlog")
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("This is work for the tracker, not a follow-up.").foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Move to Suggested Backlog Items") { model.followupToBacklog(doc.id) }
+                        .help("It becomes a suggested backlog item, checked against the tracker for duplicates, and this follow-up closes")
+                }
+            }
+        }
         GridRow {
             FieldLabel("Kind")
             HStack {
@@ -707,26 +719,36 @@ struct SourceView: View {
 }
 
 /// Text field for an inline list. Keeps what is typed (including a trailing comma) while focused.
+/// A list typed as text: what's typed stays as typed while editing, and the list is parsed from it.
 struct ListField: View {
     let placeholder: String
     @Binding var items: [String]
+    /// One item per line instead of comma separated.
+    var perLine = false
     @State private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField(placeholder, text: $text)
+        TextField(placeholder, text: $text, axis: perLine ? .vertical : .horizontal)
             .focused($focused)
-            .onAppear { text = items.joined(separator: ", ") }
+            .onAppear { text = joined(items) }
             .onChange(of: text) { _, new in
-                let parsed = new.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                let parsed = parse(new)
                 if parsed != items { items = parsed }
             }
             .onChange(of: items) { _, new in
-                if !focused { text = new.joined(separator: ", ") }
+                if !focused, parse(text) != new { text = joined(new) }
             }
             .onChange(of: focused) { _, isFocused in
-                if !isFocused { text = items.joined(separator: ", ") }
+                if !isFocused { text = joined(items) }
             }
+    }
+
+    private func joined(_ list: [String]) -> String { list.joined(separator: perLine ? "\n" : ", ") }
+
+    private func parse(_ t: String) -> [String] {
+        t.split(whereSeparator: { perLine ? $0.isNewline : $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }
 

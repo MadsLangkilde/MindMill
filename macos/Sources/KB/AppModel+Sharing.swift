@@ -1,5 +1,6 @@
 import Foundation
 import KBCore
+import KBEngine
 
 /// Private or shared entries, and the repositories a scope works on or takes knowledge from.
 extension AppModel {
@@ -26,15 +27,14 @@ extension AppModel {
     func setShared(_ id: EntryID, _ shared: Bool, quiet: Bool = false) {
         if document?.id == id, document?.isDirty == true, !quiet { save() }
         sharingBusy.insert(id)
-        let cli = cli
         let title = index.entry(id)?.title ?? id.rawValue
         let repo = sharing.repos[id.project]?.name ?? "the repository"
         Task {
-            let r = await cli.result(["share", "set", id.rawValue, shared ? "shared" : "private"])
+            var failed: String?
+            do { try await engine.setShared(id, shared) } catch { failed = error.localizedDescription }
             sharingBusy.remove(id)
-            if r.status != 0 {
-                errorMessage = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "kb: ", with: "")
+            if let failed {
+                errorMessage = failed
             } else if !quiet {
                 notice = shared
                     ? "“\(title)” is shared: a copy is in \(repo)/knowledgebase, ready to commit and push."
@@ -73,19 +73,11 @@ extension AppModel {
     func pullRepos(scope: String, only repo: String? = nil) {
         let targets = repo.map { [$0] } ?? repositories(of: scope).all.filter { $0.checkout != nil }.map(\.scope)
         reposPulling.formUnion(targets)
-        let cli = cli
         Task {
-            let r = await cli.result(["repos", "pull", "--scope", scope] + (repo.map { ["--repo", $0] } ?? []))
+            let (ok, message) = await engine.pullRepos(scope: scope, only: repo)
             reposPulling.subtract(targets)
-            let lines = (r.stdout + r.stderr).split(separator: "\n").map(String.init).filter { !$0.hasPrefix("  ") && !$0.isEmpty }
-            let failed = lines.filter { $0.contains("not pulled") || $0.contains("not on this Mac") }
-            if failed.isEmpty {
-                notice = targets.count == 1 ? "Pulled \(lines.first.map { $0.components(separatedBy: ":").first ?? "" } ?? "the repository")." : "Pulled \(targets.count) repositories."
-            } else {
-                errorMessage = failed.joined(separator: "\n")
-            }
+            if ok { notice = message } else { errorMessage = message }
             loadRepoStates(scope: scope, fetch: false)
-            reload()
         }
     }
 }

@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct ReminderSheetRequest: Identifiable, Equatable {
@@ -15,23 +16,17 @@ extension AppModel {
     func newReminder() { reminderSheet = ReminderSheetRequest(editing: nil, project: nil) }
 
     func setReminder(_ r: Reminder, status: Reminder.Status) {
-        do { try Reminders.setStatus(r, status) } catch { errorMessage = error.localizedDescription }
-        reload()
+        do { try engine.setReminder(r, status: status) } catch { errorMessage = error.localizedDescription }
     }
 
     func setReminder(_ r: Reminder, due: String) {
-        do {
-            try Reminders.setDue(r, due)
-            if r.status == .done || r.status == .dismissed { try Reminders.setStatus(r, .open) }
-        } catch { errorMessage = error.localizedDescription }
+        do { try engine.setReminder(r, due: due) } catch { errorMessage = error.localizedDescription }
         notice = due.isEmpty ? "No due date." : "Due \(DateText.display(due))."
-        reload()
     }
 
     func deleteReminder(_ r: Reminder) {
-        do { try Reminders.delete(r) } catch { errorMessage = error.localizedDescription }
+        do { try engine.deleteReminder(r) } catch { errorMessage = error.localizedDescription }
         if selectedReminderID == r.id { selectedReminderID = nil }
-        reload()
     }
 
     /// Dismisses an email reminder and tells the email scan to skip that sender from now on.
@@ -175,14 +170,9 @@ struct ReminderRow: View {
             if r.status == .proposed {
                 Image(systemName: r.isFromEmail ? "envelope.badge" : "sparkles").foregroundStyle(.purple)
             } else {
-                Button {
+                CompleteButton(done: r.status == .done, overdue: r.isOverdue()) {
                     model.setReminder(r, status: r.status == .done ? .open : .done)
-                } label: {
-                    Image(systemName: r.status == .done ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(r.status == .done ? Color.green : r.isOverdue() ? .red : .secondary)
                 }
-                .buttonStyle(.borderless)
-                .help(r.status == .done ? "Mark not done" : "Mark done")
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(r.title)
@@ -198,6 +188,8 @@ struct ReminderRow: View {
                     if let reason = r.reason { Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                     HStack(spacing: 6) {
                         Button("Add") { model.setReminder(r, status: .open) }.buttonStyle(.borderedProminent)
+                        Button { model.setReminder(r, status: .done) } label: { Label("Done", systemImage: "checkmark") }
+                            .help("It's already done: mark it done")
                         Button("Dismiss") { model.setReminder(r, status: .dismissed) }
                         if r.fromDomain != nil || r.from != nil {
                             Button("Never from \(r.fromDomain ?? r.from ?? "")") { model.dismissAndIgnoreSender(r) }
@@ -235,6 +227,7 @@ struct ReminderMenu: View {
         let q = Reminders.quickDates()
         Button("Ask \(Brain.name) About This…") { model.askAbout(.reminder(reminder)) }
         Button("Work on It with \(Brain.name)…") { model.workWithClaude(.reminder(reminder)) }
+        Button("Create Backlog Item…") { model.backlogItem(from: reminder) }
         Divider()
         Menu("Due") {
             Button("Today") { model.setReminder(reminder, due: q.today) }
@@ -261,7 +254,10 @@ struct ReminderMenu: View {
 /// The content column for Reminders: proposed first, then overdue, today, upcoming, and recently done.
 struct RemindersView: View {
     @Environment(AppModel.self) private var model
-    @State private var showDone = false
+    private var showDone: Bool {
+        get { model.foldStates["reminders.done"] ?? false }
+        nonmutating set { model.foldStates["reminders.done"] = newValue }
+    }
 
     var body: some View {
         let today = KBDate.today()
@@ -292,7 +288,12 @@ struct RemindersView: View {
             List(selection: Binding(get: { model.selectedReminderID }, set: { model.selectedReminderID = $0 })) {
                 if !query.isEmpty && all.isEmpty { ListSearchNoMatch(query: query) }
                 if !proposed.isEmpty {
-                    Section("Suggested by \(Brain.name)") { ForEach(proposed) { ReminderRow(reminder: $0).tag($0.id) } }
+                    let open = model.fold("reminders.suggested")
+                    FoldableSection(isExpanded: Binding(get: { open.wrappedValue || !query.isEmpty }, set: { open.wrappedValue = $0 })) {
+                        ForEach(proposed) { ReminderRow(reminder: $0).tag($0.id) }
+                    } header: {
+                        Text("Suggested by \(Brain.name) (\(proposed.count))")
+                    }
                 }
                 if !overdue.isEmpty {
                     Section("Overdue") { ForEach(overdue) { ReminderRow(reminder: $0).tag($0.id) } }
@@ -351,18 +352,21 @@ struct ReminderDetailView: View {
                     Text(InlineMarkdown.attributed(r.note)).textSelection(.enabled)
                 }
                 if let link = r.link { Link(r.isFromEmail ? "Open the email" : link.absoluteString, destination: link) }
-                HStack {
-                    if r.status == .proposed {
-                        Button("Add") { model.setReminder(r, status: .open) }.buttonStyle(.borderedProminent)
-                        Button("Dismiss") { model.setReminder(r, status: .dismissed) }
-                    } else if r.status == .open {
-                        Button("Mark Done") { model.setReminder(r, status: .done) }.buttonStyle(.borderedProminent)
-                    } else {
-                        Button("Reopen") { model.setReminder(r, status: .open) }
-                    }
-                    Button("Edit…") { model.reminderSheet = ReminderSheetRequest(editing: r) }
+                ChipRow(spacing: 8) {
+                if r.status == .proposed {
+                    Button("Add") { model.setReminder(r, status: .open) }.buttonStyle(.borderedProminent)
+                    Button { model.setReminder(r, status: .done) } label: { Label("Done", systemImage: "checkmark") }
+                    Button("Dismiss") { model.setReminder(r, status: .dismissed) }
+                } else if r.status == .open {
+                    Button { model.setReminder(r, status: .done) } label: { Label("Done", systemImage: "checkmark") }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Reopen") { model.setReminder(r, status: .open) }
+                }
+                Button("Edit…") { model.reminderSheet = ReminderSheetRequest(editing: r) }
+                Button("Create Backlog Item…") { model.backlogItem(from: r) }
+                    .help("Make a backlog item from this reminder, then pick the sprint and who it goes to")
                     Button { model.askAbout(.reminder(r)) } label: { Label("Ask \(Brain.name)", systemImage: "questionmark.bubble") }
-                    Spacer()
                     Button("Delete", role: .destructive) { model.deleteReminder(r) }
                 }
                 Text(r.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
@@ -415,5 +419,22 @@ struct RemindersRow: View {
         .padding(.horizontal, 8)
         .padding(.bottom, 6)
         .help("Personal reminders, and what \(Brain.name) found in your email")
+    }
+}
+
+/// A reminder's complete button: a checkmark, filled green once done.
+struct CompleteButton: View {
+    let done: Bool
+    let overdue: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: done ? "checkmark.circle.fill" : "checkmark.circle")
+                .font(.body.weight(.medium))
+                .foregroundStyle(done ? Color.green : overdue ? .red : .accentColor)
+        }
+        .buttonStyle(.borderless)
+        .help(done ? "Mark not done" : "Mark done")
     }
 }

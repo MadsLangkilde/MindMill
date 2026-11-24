@@ -477,6 +477,31 @@ class FollowupBacklogSettingsTest(KbTestCase):
         self.cli("followup", "close", fid2, "--status", "done", "--resolved-by", "Tom said yes on Teams")
         self.assertIn("resolved_by: Tom said yes on Teams", (self.root / "projects" / "app-a" / "followups" / f"{fid2.split('/')[-1]}.md").read_text())
 
+    def test_followup_that_only_creates_a_pbi_is_refused_and_converted(self):
+        r = subprocess.run([sys.executable, str(PLUGIN / "scripts" / "kb.py"), "new", "followup", "--title",
+                            "Create an Android PBI for hiding the More menu"], cwd=self.repo_a, env=self.env,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Propose it as a backlog item instead", r.stderr)
+        self.cli("new", "followup", "--title", "Add the Android PBI number to the notes")
+        folder = self.root / "projects" / "app-a" / "followups"
+        (folder / "2026-11-11-create-pbi.md").write_text(
+            "---\ntitle: Create an Android PBI for hiding the More menu\ndate: 2026-11-11\nkind: action\nstatus: open\n"
+            "summary: Needed this sprint\nsource: app-a/meetings/2026-11-11-refinement\n---\n\nHide the entries.\n\n"
+            "## Updates\n\n- 2026-11-12: asked\n")
+        new_id = self.cli("followup", "to-backlog", "app-a/followups/2026-11-11-create-pbi").stdout.strip()
+        b = kb.find_entry(self.root, new_id)
+        self.assertEqual((b.section, b.title, b.status, b.get("kind"), b.get("source")),
+                         ("backlog", "Hiding the More menu", "proposed", "pbi", "app-a/meetings/2026-11-11-refinement"))
+        self.assertEqual(b.body.strip(), "Hide the entries.")
+        f = kb.find_entry(self.root, "app-a/followups/2026-11-11-create-pbi")
+        self.assertEqual((f.status, f.get("resolved_by")), ("done", new_id))
+        # A second one from the same source about the same work reuses the suggestion.
+        (folder / "2026-11-11-create-pbi-2.md").write_text(
+            "---\ntitle: Create PBI for hiding the More menu\ndate: 2026-11-11\nkind: action\nstatus: open\n"
+            "source: app-a/meetings/2026-11-11-refinement\n---\n")
+        self.assertEqual(self.cli("followup", "to-backlog", "app-a/followups/2026-11-11-create-pbi-2").stdout.strip(), new_id)
+
     def test_followup_close_and_context(self):
         fid = self.cli("new", "followup", "--type", "question", "--title", "Which export format?",
                        "--field", "owner=BFF").stdout.split()[0]
@@ -534,6 +559,12 @@ class FollowupBacklogSettingsTest(KbTestCase):
         values = {op["path"]: op["value"] for op in json.loads(r.stdout)["operations"]}
         self.assertEqual(values["/fields/System.Tags"], "Android; upload")
 
+    def test_prefixed_title_adds_the_prefix_once(self):
+        self.assertEqual(kb.prefixed_title("Android: ", "Block settings"), "Android: Block settings")
+        self.assertEqual(kb.prefixed_title("Android: ", "Android: Block settings"), "Android: Block settings")
+        self.assertEqual(kb.prefixed_title("iOS: ", "ios: Block settings"), "ios: Block settings")
+        self.assertEqual(kb.prefixed_title("", "Block settings"), "Block settings")
+
     def test_local_tags_never_reach_the_tracker_unless_aligned(self):
         self.assertEqual(kb.tracker_tag_additions(["auth", "bff"], [], ["Android"]), [])
         self.assertEqual(kb.tracker_tag_additions(["auth", "bff"], ["bff", "ios"], ["Android"]), ["bff"])
@@ -562,6 +593,15 @@ class FollowupBacklogSettingsTest(KbTestCase):
         finally:
             kb.ado_request, kb.ado_pat = orig
         self.assertEqual(sent, [[{"op": "add", "path": "/fields/System.Tags", "value": "Android; Release; bff"}]])
+
+    def test_pr_list_without_azure_devops_is_empty_and_needs_no_pat(self):
+        orig = kb.ado_pat
+        kb.ado_pat = lambda: self.fail("no PAT is needed without an Azure DevOps tracker")
+        try:
+            data = kb.my_pull_requests(self.root)
+        finally:
+            kb.ado_pat = orig
+        self.assertEqual((data["prs"], data["closed"]), ([], []))
 
     def test_pr_comment_starts_a_new_active_thread(self):
         sent = []
@@ -823,6 +863,229 @@ class FollowupBacklogSettingsTest(KbTestCase):
         self.assertIn("- [ ] [app-a] Do it (x)", (d / "2026-11-06.md").read_text())
 
 
+class BacklogLinksTest(KbTestCase):
+    """Parent and related links of proposals, the repair command and the duplicate check."""
+
+    def ado(self, prefix_a="App A: ", prefix_b="App B: "):
+        for pid, prefix in (("app-a", prefix_a), ("app-b", prefix_b)):
+            self.cli("settings", "set", "tracker", json.dumps({"kind": "azure-devops", "organization": "O", "project": "P",
+                                                                "title_prefix": prefix}), "--project", pid)
+
+    def propose(self, title, body, *fields, project="app-a"):
+        args = ["new", "backlog", "--project", project, "--cross-project", "--type", "pbi", "--title", title, "--body-stdin"]
+        for f in fields:
+            args += ["--field", f]
+        r = self.cli(*args, stdin=body)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.split()[0]
+
+    def run_main(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        from contextlib import redirect_stderr
+        with redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = kb.main(list(args))
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def fake_ado(self, handler):
+        orig = (kb.ado_request, kb.ado_pat)
+        kb.ado_request, kb.ado_pat = handler, (lambda: "pat")
+        self.addCleanup(lambda: setattr(kb, "ado_request", orig[0]) or setattr(kb, "ado_pat", orig[1]))
+
+    def test_parent_mentions(self):
+        self.assertEqual(kb.parent_mentions('Parent: Feature #431006 "Offline usage limit". Requested on 23 Nov.'), [431006])
+        self.assertEqual(kb.parent_mentions("Create PBIs under Feature #431006 after the meeting"), [431006])
+        self.assertEqual(kb.parent_mentions("Feature here: https://dev.azure.com/O/P/_workitems/edit/431006"), [431006])
+        self.assertEqual(kb.parent_mentions("Feature 431006 says the app blocks measuring."), [431006])
+        self.assertEqual(kb.parent_mentions("Feature 431006 says so.", strong_only=True), [])
+        self.assertEqual(kb.parent_mentions("- 14:17 **Screen:** Add link / Parent / $ 446324 General maintenance"), [])
+        self.assertEqual(kb.parent_mentions("The parent is unclear. See PBI #12345"), [])
+        self.assertEqual(kb.work_item_refs("PBI #430094 and https://dev.azure.com/O/P/_workitems/edit/7 and Bug 123456"),
+                         [430094, 7, 123456])
+
+    def test_create_reads_the_parent_from_the_text_and_links_siblings(self):
+        self.ado()
+        body = ("## Description\nParent: Feature #431006 \"Offline usage limit\". One PBI per platform.\n\n"
+                "## Acceptance criteria\n- blocked\n")
+        a = self.propose("Block measuring offline", body, "parent=none", "sprint=none", "assignee=none")
+        b = self.propose("Block measuring offline too", body, "parent=none", "sprint=none", "assignee=none",
+                         f"related=[{a}]")
+        r = self.cli("backlog", "create", a, "--sprint", "none")
+        plan = json.loads(r.stdout)
+        rels = [op["value"] for op in plan["operations"] if op["path"] == "/relations/-"]
+        self.assertEqual(rels, [{"rel": "System.LinkTypes.Hierarchy-Reverse",
+                                 "url": "https://dev.azure.com/O/P/_apis/wit/workitems/431006"}])
+        self.assertIn("the entry's text", plan["parent_from"])
+        self.assertIn("parent #431006", r.stderr)
+        self.assertEqual(kb.find_entry(self.root, a).status, "proposed")
+
+        posted, ids = [], iter([101, 102])
+
+        def fake(method, url, pat, body=None, content_type=None):
+            posted.append(body)
+            return {"id": next(ids)}
+        self.fake_ado(fake)
+        code, out, err = self.run_main("backlog", "create", a, b, "--sprint", "none", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertIn("created 101", out)
+        self.assertIn("parent #431006 (read from the entry's text", out)
+        first = [op["value"]["rel"] for op in posted[0] if op["path"] == "/relations/-"]
+        second = [op["value"] for op in posted[1] if op["path"] == "/relations/-"]
+        self.assertEqual(first, ["System.LinkTypes.Hierarchy-Reverse"])
+        self.assertIn({"rel": "System.LinkTypes.Related", "url": "https://dev.azure.com/O/P/_apis/wit/workitems/101"}, second)
+        ea, eb = kb.find_entry(self.root, a), kb.find_entry(self.root, b)
+        self.assertEqual((ea.get("parent"), ea.get("related"), ea.get("work_item")), ("431006", ["102"], "101"))
+        self.assertEqual((eb.get("parent"), eb.get("related"), eb.status), ("431006", ["101"], "created"))
+
+    def test_create_takes_the_parent_from_the_source_and_parent_flag_wins(self):
+        self.ado()
+        mid = self.cli("new", "meeting", "--title", "Planning", "--body-stdin", stdin=(
+            "## Action items\n- [ ] Create PBIs for both platforms under Feature #431006\n"
+            "- 14:17 **Screen:** Add link / Parent / #446324 General maintenance\n")).stdout.split()[0]
+        bid = self.propose("Block measuring offline", "## Description\nBlock it.\n", f"source=[{mid}]", "sprint=none")
+        r = self.cli("backlog", "create", bid, "--sprint", "none")
+        self.assertIn("its source “Planning”", json.loads(r.stdout)["parent_from"])
+        r = self.cli("backlog", "create", bid, "--sprint", "none", "--parent", "none")
+        self.assertNotIn("/relations/-", [op["path"] for op in json.loads(r.stdout)["operations"]])
+        r = self.cli("backlog", "create", bid, "--sprint", "none", "--parent", "#77")
+        self.assertIn("workitems/77", json.dumps(json.loads(r.stdout)["operations"]))
+
+    def test_link_repairs_created_items_in_the_tracker_and_the_entries(self):
+        self.ado()
+        a = self.propose("Android: Block", "Parent: Feature #431006.\n", "status=created", "work_item=431548", "parent=none")
+        b = self.propose("iOS: Block", "Parent: Feature #431006.\n", "status=created", "work_item=431549", "parent=none")
+        patched = []
+
+        def fake(method, url, pat, body=None, content_type=None):
+            if method == "GET":
+                old = [{"rel": "System.LinkTypes.Hierarchy-Reverse", "url": "https://x/_apis/wit/workitems/1"}] \
+                    if "/431549?" in url else []
+                return {"relations": old}
+            patched.append((url, body))
+            return {}
+        self.fake_ado(fake)
+        code, out, _ = self.run_main("backlog", "link", a, b, "--parent", "431006")
+        self.assertEqual(code, 2)
+        self.assertEqual(patched, [])
+        self.assertIn("#431548: related to #431549", out)
+        code, out, err = self.run_main("backlog", "link", a, b, "--parent", "431006", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(patched), 2)
+        self.assertIn("/431548?", patched[0][0])
+        self.assertEqual([(op["op"], (op.get("value") or {}).get("rel")) for op in patched[0][1]],
+                         [("add", "System.LinkTypes.Hierarchy-Reverse"), ("add", "System.LinkTypes.Related")])
+        self.assertEqual([(op["op"], op["path"]) for op in patched[1][1]], [("remove", "/relations/0"), ("add", "/relations/-")])
+        self.assertIn("#431549: parent #431006 (was #1)", out)
+        ea, eb = kb.find_entry(self.root, a), kb.find_entry(self.root, b)
+        self.assertEqual((ea.get("parent"), ea.get("related")), ("431006", ["431549"]))
+        self.assertEqual((eb.get("parent"), eb.get("related")), ("431006", ["431548"]))
+
+    def test_link_on_a_proposal_only_sets_its_fields(self):
+        self.ado()
+        a = self.propose("A", "x\n")
+        b = self.propose("B", "x\n")
+        code, out, err = self.run_main("backlog", "link", a, "--parent", "5", "--related", f"{b},#9", "--yes")
+        self.assertEqual(code, 0, err)
+        e = kb.find_entry(self.root, a)
+        self.assertEqual((e.get("parent"), e.get("related")), ("5", [b, "9"]))
+
+    def test_duplicates_classifies_against_the_tracker_and_other_proposals(self):
+        self.ado()
+        p1 = self.propose("Block upload after the offline days are used up", "## Description\nBlock it.\n",
+                          "parent=431006")
+        p2 = self.propose("Block upload when offline days are used up", "## Description\nSame thing.\n")
+        p3 = self.propose("Login with a passkey", "## Description\nPasskeys. Overlaps PBI #888.\n",
+                          "not_duplicate_of=[6]")
+        twin = self.propose("Block upload after the offline days are used up", "x\n", project="app-b")
+        queries = []
+
+        def fake(method, url, pat, body=None, content_type=None):
+            if "/wiql" in url:
+                queries.append(body["query"])
+                return {"workItems": [{"id": 5}, {"id": 6}, {"id": 7}, {"id": 888}]}
+            if "$expand=relations" in url:
+                self.assertIn("/431006?", url)
+                return {"relations": [{"rel": "System.LinkTypes.Hierarchy-Forward", "url": "https://x/workitems/9"}]}
+            if "/wit/workitems?ids=" in url:
+                f = lambda i, t, parent=None: {"id": i, "fields": {"System.Title": t, "System.State": "New",
+                                                                   "System.WorkItemType": "Product Backlog Item",
+                                                                   "System.Parent": parent}}
+                return {"value": [f(5, "App A: Block upload after offline days are used up"),
+                                  f(6, "App A: Passkey login screen"),
+                                  f(7, "App A: Offline days grace period blocks upload settings", 431006),
+                                  f(888, "App A: Something else entirely"),
+                                  f(9, "App B: Block upload after the offline days are used up", 431006)]}
+            raise AssertionError(url)
+        self.fake_ado(fake)
+        code, out, err = self.run_main("backlog", "duplicates", "--scope", "app-a", "--json")
+        self.assertEqual(code, 0, err)
+        report = json.loads(out)
+        by = {p["id"]: p for p in report["proposals"]}
+        self.assertEqual(set(by), {p1, p2, p3})
+        self.assertEqual(by[p1]["verdict"], "likely")
+        self.assertEqual(by[p1]["matches"][0]["number"], 5)
+        self.assertNotIn(9, [m["number"] for m in by[p1]["matches"]])
+        self.assertIn(7, [m["number"] for m in by[p1]["matches"]])
+        self.assertIn(p1, [m["id"] for m in by[p2]["matches"]])
+        self.assertEqual(by[p3]["verdict"], "possible")
+        self.assertEqual([m["number"] for m in by[p3]["matches"]], [888])
+        self.assertTrue(any("CONTAINS 'upload'" in q for q in queries))
+        self.assertNotIn(twin, by)
+
+    def test_drop_marks_the_proposal_and_comments_on_the_existing_item(self):
+        self.ado()
+        p = self.propose("Block", "## Description\nBlock it.\n\n## Acceptance criteria\n- blocked\n")
+        other = self.propose("Other", "x\n", f"related=[{p}]")
+        sent = []
+
+        def fake(method, url, pat, body=None, content_type=None):
+            sent.append((method, url, body))
+            return {}
+        self.fake_ado(fake)
+        code, out, _ = self.run_main("backlog", "drop", p, "--duplicate-of", "#5", "--comment")
+        self.assertEqual((code, sent), (2, []))
+        code, out, err = self.run_main("backlog", "drop", p, "--duplicate-of", "#5", "--comment", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(sent[0][0], "POST")
+        self.assertIn("/workitems/5/comments", sent[0][1])
+        self.assertIn("Also proposed: Block", sent[0][2]["text"])
+        self.assertIn("<li>blocked</li>", sent[0][2]["text"])
+        e = kb.find_entry(self.root, p)
+        self.assertEqual((e.status, e.get("duplicate_of")), ("rejected", "5"))
+        self.assertEqual(kb.find_entry(self.root, other).get("related"), ["5"])
+        r = self.cli("backlog", "not-duplicate", other, "#6", p)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(kb.find_entry(self.root, other).get("not_duplicate_of"), ["6", p])
+
+    def test_local_tracker_create_keeps_parent_and_related(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}))
+        self.cli("work", "add", "feature", "Offline")
+        a = self.propose("Block A", "## Description\nParent: Feature #1.\n", "sprint=none")
+        b = self.propose("Block B", "## Description\nx\n", "sprint=none", "parent=1", f"related=[{a}]")
+        r = self.cli("backlog", "create", a, b, "--yes")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("created 2 -", r.stdout)
+        items = {i["id"]: i for i in json.loads((self.root / "projects" / "app-a" / "work.json").read_text())["items"]}
+        self.assertEqual((items[2]["parent"], items[3]["parent"]), (1, 1))
+        self.assertEqual((items[2].get("related"), items[3].get("related")), ([3], [2]))
+        self.assertEqual(kb.find_entry(self.root, a).get("related"), ["3"])
+
+    def test_tracker_items_search_needs_every_word_not_the_phrase(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "azure-devops", "organization": "O", "project": "P"}))
+        queries = []
+
+        def fake(method, url, pat, body=None, content_type=None):
+            if body and "query" in body:
+                queries.append(body["query"])
+            return {"workItems": [], "value": []}
+        self.fake_ado(fake)
+        code, _, err = self.run_main("tracker", "items", "--search", "offline block", "--project", "app-a")
+        self.assertEqual(code, 0, err)
+        self.assertIn("[System.Title] CONTAINS 'offline' AND [System.Title] CONTAINS 'block'", queries[0])
+
+
 class WorkTrackerTest(KbTestCase):
     """`kb work`: the built-in tracker in <scope>/work.json, shared with the app."""
 
@@ -963,6 +1226,41 @@ class WorkTrackerTest(KbTestCase):
         self.assertEqual((rows[2]["tasks_done"], rows[2]["tasks_total"], rows[2]["scopes"]), (1, 2, ["app-a"]))
         self.assertEqual(rows[4]["stage"], "done")
 
+    def test_tracker_resolve_moves_finished_work_to_done_and_needs_yes(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}))
+        self.cli("work", "add", "bug", "Crash on start", "--state", "Committed")
+        r = subprocess.run([sys.executable, str(PLUGIN / "scripts" / "kb.py"), "tracker", "resolve", "1"],
+                           cwd=self.repo_a, env=self.no_ado(), capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--yes", r.stderr)
+        self.assertIn("#1 is now Done", self.cli("tracker", "resolve", "#1", "--yes").stdout)
+        self.assertIn("#1 is already Done", self.cli("tracker", "resolve", "1", "--yes").stdout)
+
+    def test_resolved_state_prefers_resolved_then_completed(self):
+        agile = [{"name": "New", "category": "Proposed"}, {"name": "Active", "category": "InProgress"},
+                 {"name": "Resolved", "category": "Resolved"}, {"name": "Closed", "category": "Completed"}]
+        self.assertEqual(kb.resolved_state("Active", agile), "Resolved")
+        self.assertIsNone(kb.resolved_state("Resolved", agile))
+        self.assertEqual(kb.resolved_state("Committed", kb.SCRUM_STATES), "Done")
+
+    def test_tracker_find_matches_id_or_title_words_and_skips_tasks(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}))
+        self.cli("work", "add", "feature", "Block upload")
+        self.cli("work", "add", "pbi", "Upload settings screen", "--parent", "1")
+        self.cli("work", "add", "task", "Upload task", "--parent", "2")
+        self.cli("work", "add", "pbi", "Old upload", "--state", "Done")
+
+        def find(q):
+            r = subprocess.run([sys.executable, str(PLUGIN / "scripts" / "kb.py"), "tracker", "find", q, "--json"],
+                               cwd=self.repo_a, env=self.no_ado(), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return [i["id"] for i in json.loads(r.stdout)["items"]]
+
+        self.assertEqual(find("upload"), [2, 1, 4])
+        self.assertEqual(find("settings upload"), [2])
+        self.assertEqual(find("#1"), [1])
+        self.assertEqual(find("nothing"), [])
+
     def test_tracker_points_jira_and_local_scopes_elsewhere(self):
         self.cli("settings", "set", "tracker", json.dumps({"kind": "jira"}))
         self.assertEqual(json.loads(self.cli("tracker", "show").stdout), {"kind": "jira"})
@@ -973,6 +1271,206 @@ class WorkTrackerTest(KbTestCase):
             self.assertIn("app-a tracks work in Jira; use Claude's Jira connector", r.stderr)
         self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}))
         self.assertIn("kb work", self.cli("tracker", "features").stderr)
+
+
+
+class SprintTest(KbTestCase):
+    """`kb sprint`: each tracker's sprints around today, the previous sprint's leftovers, and decisions on them."""
+
+    def no_ado(self):
+        env = {**self.env, "HOME": str(self.tmp)}
+        env.pop("KB_ADO_PAT", None)
+        return env
+
+    def run_kb(self, *args, stdin=""):
+        return subprocess.run([sys.executable, str(PLUGIN / "scripts" / "kb.py"), *args], cwd=self.repo_a,
+                              env=self.no_ado(), input=stdin, capture_output=True, text=True)
+
+    def local_sprints(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}))
+        self.cli("work", "sprint", "use", "on")
+        self.cli("work", "sprint", "add", "Sprint 41", "--start", "2026-11-02", "--finish", "2026-11-15")
+        self.cli("work", "sprint", "add", "Sprint 42", "--start", "2026-11-16", "--finish", "2026-11-29")
+
+    def test_neighbours_and_states(self):
+        s = [{"name": "S1", "start": "2026-11-02", "finish": "2026-11-15"},
+             {"name": "S2", "start": "2026-11-16", "finish": "2026-11-29"},
+             {"name": "S4", "start": "2026-12-14", "finish": "2026-12-27"}]
+        n = kb.sprint_neighbours(s, "2026-11-20")
+        self.assertEqual((n["state"], n["previous"]["name"], n["current"]["name"], n["next"]["name"]), ("running", "S1", "S2", "S4"))
+        n = kb.sprint_neighbours(s, "2026-12-01")
+        self.assertEqual((n["state"], n["previous"]["name"], n["current"], n["next"]["name"], n["days_since_end"]),
+                         ("between", "S2", None, "S4", 2))
+        n = kb.sprint_neighbours(s, "2027-01-01")
+        self.assertEqual((n["state"], n["previous"]["name"], n["next"], n["days_since_end"]), ("ended", "S4", None, 5))
+        self.assertEqual(kb.sprint_neighbours(s, "2026-10-01")["state"], "upcoming")
+        self.assertEqual(kb.sprint_neighbours([], "2026-10-01")["state"], "none")
+        self.assertEqual(kb.sprint_neighbours(s, "2026-11-16")["previous"]["path"], "S1")
+
+    def test_changeover_day_picks_the_new_sprint(self):
+        s = [{"name": "S25", "start": "2026-11-09", "finish": "2026-11-23"},
+             {"name": "S26", "start": "2026-11-23", "finish": "2026-12-06"}]
+        self.assertEqual(kb.current_sprint(s, "2026-11-23")["name"], "S26")
+        self.assertEqual([kb.sprint_when(x, "2026-11-23", s) for x in s], ["past", "current"])
+        n = kb.sprint_neighbours(s, "2026-11-23")
+        self.assertEqual((n["previous"]["name"], n["current"]["name"]), ("S25", "S26"))
+
+    def test_status_for_local_ado_and_jira(self):
+        self.local_sprints()
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "jira"}), "--project", "app-b")
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "azure-devops", "organization": "O", "project": "P",
+                                                            "iteration_root": "P\\R"}), "--project", "shared")
+        tree = {"name": "P", "children": [{"name": "R", "children": [
+            {"name": "S7", "attributes": {"startDate": "2026-11-09T00:00:00Z", "finishDate": "2026-11-20T00:00:00Z"}},
+            {"name": "S8", "attributes": {"startDate": "2026-11-23T00:00:00Z", "finishDate": "2026-12-04T00:00:00Z"}}]},
+            {"name": "Other", "attributes": {"startDate": "2026-11-23T00:00:00Z", "finishDate": "2026-12-04T00:00:00Z"}}]}
+        orig = (kb.ado_request, kb.ado_pat)
+        kb.ado_request, kb.ado_pat = (lambda method, url, pat, body=None, content_type=None: tree), (lambda: "pat")
+        try:
+            data = kb.sprint_status(self.root, today="2026-11-23")
+        finally:
+            kb.ado_request, kb.ado_pat = orig
+        by = {t["kind"]: t for t in data["trackers"]}
+        self.assertEqual((by["local"]["state"], by["local"]["current"]["name"], by["local"]["previous"]["name"],
+                          by["local"]["can_create"]), ("running", "Sprint 42", "Sprint 41", True))
+        ado = by["azure-devops"]
+        self.assertEqual((ado["key"], ado["scopes"], ado["current"]["path"], ado["previous"]["path"], ado["next"]),
+                         ("azure-devops:O/P:P\\R", ["shared"], "P\\R\\S8", "P\\R\\S7", None))
+        self.assertTrue(ado["create_url"].startswith("https://dev.azure.com/O/P/"))
+        self.assertEqual((by["jira"]["reachable"], by["jira"]["state"]), (False, "unknown"))
+        self.assertIn("Jira connector", by["jira"]["note"])
+
+    def test_status_cli_without_ado_and_ended_local_sprint(self):
+        self.local_sprints()
+        r = self.run_kb("sprint", "status", "--json", "--today", "2026-12-01")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        t = json.loads(r.stdout)["trackers"][0]
+        self.assertEqual((t["state"], t["previous"]["name"], t["next"], t["days_since_end"]), ("ended", "Sprint 42", None, 2))
+        self.cli("work", "sprint", "use", "off")
+        t = json.loads(self.run_kb("sprint", "status", "--json").stdout)["trackers"][0]
+        self.assertEqual(t["state"], "off")
+
+    def test_status_says_when_ado_cant_be_reached(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "azure-devops", "organization": "O", "project": "P"}))
+        t = json.loads(self.run_kb("sprint", "status", "--json").stdout)["trackers"][0]
+        self.assertEqual((t["reachable"], t["state"]), (False, "unknown"))
+        self.assertIn("PAT", t["note"])
+
+    def test_review_and_apply_in_the_local_tracker(self):
+        self.local_sprints()
+        self.cli("work", "add", "pbi", "Left over", "--sprint", "Sprint 41", "--state", "Committed", "--assignee", "Ann")
+        self.cli("work", "add", "task", "Open task", "--parent", "1", "--sprint", "Sprint 41")
+        self.cli("work", "add", "bug", "Fixed", "--sprint", "Sprint 41", "--state", "Done")
+        self.cli("work", "add", "pbi", "Not begun", "--sprint", "Sprint 41")
+        self.cli("work", "add", "pbi", "This sprint", "--sprint", "Sprint 42")
+        r = self.run_kb("sprint", "review", "--json", "--today", "2026-11-23")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        review = json.loads(r.stdout)
+        self.assertEqual((review["sprint"]["name"], review["target"]["name"]), ("Sprint 41", "Sprint 42"))
+        self.assertEqual([(i["id"], i["assignee"], i["tasks_total"]) for i in review["items"]], [(1, "Ann", 1), (4, "", 0)])
+        self.assertEqual([s["name"] for s in review["states"]["task"]][-2:], ["Done", "Removed"])
+        decisions = [{"id": 1, "do": "move", "sprint": "Sprint 42", "tasks": [2]}, {"id": 4, "do": "backlog"},
+                     {"id": 99, "do": "state", "state": "Done"}, {"id": 3, "do": "explode"}]
+        dry = self.run_kb("sprint", "apply", stdin=json.dumps(decisions))
+        self.assertIn("would have #1 moved to Sprint 42 with 1 task(s)", dry.stdout)
+        self.assertIn("nothing changed", dry.stdout)
+        self.assertEqual(json.loads(self.cli("work", "show", "1", "--json").stdout)["sprint"], "Sprint 41")
+        r = self.run_kb("sprint", "apply", "--yes", "--json", stdin=json.dumps(decisions))
+        results = json.loads(r.stdout)["results"]
+        self.assertEqual([x["ok"] for x in results], [True, True, False, False])
+        self.assertIn("no work item #99", results[2]["message"])
+        self.assertEqual([json.loads(self.cli("work", "show", str(i), "--json").stdout)["sprint"] for i in (1, 2, 4)],
+                         ["Sprint 42", "Sprint 42", ""])
+        r = self.run_kb("sprint", "apply", "--yes", stdin=json.dumps([{"id": 1, "do": "state", "state": "done",
+                                                                       "tasks": [2], "task_state": "Done"}]))
+        self.assertEqual(r.stdout, "#1 set to done, 1 task(s) to Done\n")
+        self.assertEqual(json.loads(self.cli("work", "show", "2", "--json").stdout)["state"], "Done")
+
+    def test_create_the_next_local_sprint(self):
+        self.assertEqual(kb.next_sprint_proposal([{"name": "Sprint 09", "start": "2026-11-02", "finish": "2026-11-15"}],
+                                                 "2026-11-10"),
+                         {"name": "Sprint 10", "start": "2026-11-16", "finish": "2026-11-29"})
+        self.assertEqual(kb.next_sprint_proposal([{"name": "Q", "start": "2026-11-02", "finish": "2026-11-08"}], "2026-11-20"),
+                         {"name": "Sprint 2", "start": "2026-11-20", "finish": "2026-11-26"})
+        self.assertEqual(kb.next_sprint_proposal([], "2026-11-20")["finish"], "2026-12-03")
+        self.local_sprints()
+        r = self.run_kb("sprint", "create", "--today", "2026-12-01")
+        self.assertEqual(r.stdout, "added sprint Sprint 43 2026-12-01..2026-12-14\n", r.stderr)
+        self.assertIn("already a sprint", self.run_kb("sprint", "create", "--name", "sprint 43").stderr)
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "azure-devops", "organization": "O", "project": "P"}))
+        r = self.run_kb("sprint", "create")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Iterations", r.stderr)
+
+    def test_review_and_apply_in_azure_devops(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "azure-devops", "organization": "O", "project": "P",
+                                                            "iteration_root": "P\\R"}))
+        tree = {"name": "P", "children": [{"name": "R", "children": [
+            {"name": "S7", "attributes": {"startDate": "2026-11-09T00:00:00Z", "finishDate": "2026-11-20T00:00:00Z"}},
+            {"name": "S8", "attributes": {"startDate": "2026-11-23T00:00:00Z", "finishDate": "2026-12-04T00:00:00Z"}}]}]}
+        patched = []
+
+        def fake(method, url, pat, body=None, content_type=None):
+            if method == "PATCH":
+                wid = int(url.split("/workitems/")[1].split("?")[0])
+                if wid == 13:
+                    raise kb.urllib.error.HTTPError(url, 400, "Bad", {}, io.BytesIO(b'{"message": "rule broken"}'))
+                patched.append((wid, body))
+                return {}
+            if "classificationnodes" in url:
+                return tree
+            if "connectionData" in url:
+                return {"authenticatedUser": {"id": "me"}}
+            if "/states" in url:
+                return {"value": [{"name": "New", "category": "Proposed"}, {"name": "Active", "category": "InProgress"},
+                                  {"name": "Resolved", "category": "Resolved"}, {"name": "Closed", "category": "Completed"},
+                                  {"name": "Removed", "category": "Removed"}]}
+            if "/wiql" in url:
+                self.assertIn("[System.IterationPath] = 'P\\R\\S7'", body["query"])
+                return {"workItems": [{"id": 11}, {"id": 12}]}
+            if "pullrequests?" in url:
+                return {"value": []}
+            if "/wit/workitems?" in url and "relations" in url:
+                f = lambda i, st: {"id": i, "fields": {"System.Title": f"T{i}", "System.State": st, "System.WorkItemType": "Bug",
+                                                       "System.IterationPath": "P\\R\\S7"}}
+                return {"value": [f(11, "Active"), f(12, "Closed")]}
+            if "/wit/workitems?" in url:
+                return {"value": []}
+            raise AssertionError(url)
+        orig = (kb.ado_request, kb.ado_pat)
+        kb.ado_request, kb.ado_pat = fake, (lambda: "pat")
+        try:
+            review = kb.sprint_review(self.root, "app-a", today="2026-11-24")
+            results = kb.apply_sprint_decisions(self.root, "app-a", [
+                {"id": 11, "do": "move", "sprint": "P\\R\\S8", "tasks": [21]},
+                {"id": 12, "do": "backlog"}, {"id": 13, "do": "state", "state": "Closed"},
+                {"id": 14, "do": "state", "state": "Closed", "tasks": [22], "task_state": "Closed"}])
+        finally:
+            kb.ado_request, kb.ado_pat = orig
+        self.assertEqual((review["sprint"]["path"], review["target"]["path"], review["backlog"]), ("P\\R\\S7", "P\\R\\S8", "P\\R"))
+        self.assertEqual([i["id"] for i in review["items"]], [11])
+        self.assertEqual([s["name"] for s in review["states"]["bug"]], ["New", "Active", "Resolved", "Closed", "Removed"])
+        self.assertEqual([r["ok"] for r in results], [True, True, False, True])
+        self.assertEqual(results[2]["message"], "#13: rule broken")
+        self.assertEqual([w for w, _ in patched], [11, 21, 12, 14, 22])
+        self.assertEqual(patched[1][1], [{"op": "add", "path": "/fields/System.IterationPath", "value": "P\\R\\S8"}])
+        self.assertEqual(patched[2][1], [{"op": "add", "path": "/fields/System.IterationPath", "value": "P\\R"}])
+        self.assertEqual(patched[4][1], [{"op": "add", "path": "/fields/System.State", "value": "Closed"}])
+
+    def test_tracker_move_to_the_backlog(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "azure-devops", "organization": "O", "project": "P"}))
+        self.assertEqual(kb.ado_backlog_iteration({"project": "P"}), "P")
+        self.assertEqual(kb.ado_backlog_iteration({"project": "P", "iteration_root": "P\\R\\"}), "P\\R")
+        self.assertEqual(kb.ado_backlog_iteration({"project": "P", "iteration_root": "P\\R", "backlog_iteration": "P\\B"}), "P\\B")
+        r = self.run_kb("tracker", "move", "5", "--backlog", "--sprint", "x")
+        self.assertEqual(r.returncode, 2)
+
+    def test_jira_review_points_at_claude(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "jira"}))
+        for args in (("review",), ("apply", "--yes"), ("create",)):
+            r = self.run_kb("sprint", *args, stdin="[]")
+            self.assertEqual(r.returncode, 1, args)
+            self.assertIn("Jira", r.stderr)
 
 
 class SplitLayoutTest(KbTestCase):
@@ -1275,8 +1773,8 @@ class GoalTest(KbTestCase):
 
 class IdeaTest(KbTestCase):
     def test_idea_notes_and_status(self):
-        r = self.cli("new", "idea", "--title", "Offline sync for measurements", "--summary", "Queue uploads",
-                     "--body", "Keep measurements when offline.")
+        r = self.cli("new", "idea", "--title", "Offline sync for uploads", "--summary", "Queue uploads",
+                     "--body", "Keep uploads when offline.")
         self.assertEqual(r.returncode, 0, r.stderr)
         iid = r.stdout.split()[0]
         self.assertIn("/ideas/", iid)
@@ -1287,7 +1785,7 @@ class IdeaTest(KbTestCase):
         self.assertEqual(e.status, "exploring")
         self.assertIn("- Use WorkManager", kb.body_section(e.body, "Brainstorm"))
         self.assertIn("- [ ] How long to keep them?", kb.body_section(e.body, "Open questions"))
-        self.assertIn("Keep measurements when offline.", kb.body_section(e.body, "The idea"))
+        self.assertIn("Keep uploads when offline.", kb.body_section(e.body, "The idea"))
         self.cli("idea", "status", iid, "shelved")
         self.assertNotIn("Offline sync", self.cli("idea", "list").stdout)
         self.assertIn("shelved", self.cli("idea", "list", "--all").stdout)
@@ -1589,7 +2087,7 @@ class CrewTest(KbTestCase):
         (self.crew / "state.json").write_text(json.dumps({"updated": "2020-01-01T00:00:00Z", "sessions": []}))
         r = self.cli("sync", "calendar", "prs")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("kb:calendar skill", r.stdout)
+        self.assertIn("mindmill:calendar skill", r.stdout)
         self.assertIn("read Azure DevOps live", r.stdout)
         self.assertEqual(kb.sync_kinds(["all"]), ["calendar", "tracker", "prs"])
         self.assertNotEqual(self.cli("sync", "weather").returncode, 0)
@@ -2149,3 +2647,87 @@ class ShareTest(unittest.TestCase):
         text = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("Works on: App", text)
         self.assertIn("Knowledge only, read but never change: Lib", text)
+
+
+class WindowsPortabilityTest(KbTestCase):
+    """Entries are shared with Windows users through Git, and kb itself runs on Windows."""
+
+    def test_names_windows_rejects(self):
+        for bad in ("a:b.md", "what?.md", "x.md.", "trailing ", "CON", "con.md", "Lpt3.txt", "tab\there", "a" * 256):
+            self.assertIsNotNone(kb.windows_name_problem(bad), bad)
+        for good in ("2026-01-01-use-room.md", "overview.md", "console.md", "com10.md", "æøå.md", ".gitattributes"):
+            self.assertIsNone(kb.windows_name_problem(good), good)
+        self.assertEqual(kb.case_clashes(["A.md", "a.md", "b.md"]), [["A.md", "a.md"]])
+
+    def test_lint_reports_unportable_names(self):
+        facts = self.root / "projects" / "app-a" / "facts"
+        (facts / "ok.md").write_text("---\ntitle: OK\n---\n")
+        (facts / "why?.md").write_text("---\ntitle: Why\n---\n")
+        (facts / "Same.png").write_bytes(b"x")
+        (facts / "same.png").write_bytes(b"y")
+        r = self.cli("lint")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("why?.md: has '?'", r.stdout)
+        if len(list(facts.glob("*.png"))) == 2:  # a case-sensitive volume keeps both
+            self.assertIn("Same.png, same.png differ only by case", r.stdout)
+
+    def test_new_team_folder_gets_gitattributes(self):
+        repo = self.tmp / "repo"
+        (repo / ".git").mkdir(parents=True)
+        entry = repo / "knowledgebase" / "facts" / "f.md"
+        kb.prepare_team_folder(entry)
+        self.assertEqual((repo / "knowledgebase" / ".gitattributes").read_text(), "* text=auto eol=lf\n")
+        (repo / "knowledgebase" / ".gitattributes").write_text("custom\n")
+        kb.prepare_team_folder(entry)
+        self.assertEqual((repo / "knowledgebase" / ".gitattributes").read_text(), "custom\n", "an existing folder is left alone")
+        plain = self.tmp / "plain" / "knowledgebase" / "facts" / "f.md"
+        kb.prepare_team_folder(plain)
+        self.assertFalse((self.tmp / "plain" / "knowledgebase").exists(), "only inside a repository")
+
+    def test_writes_are_lf(self):
+        p = self.tmp / "x" / "e.md"
+        kb.write_atomic(p, "a\nb\n")
+        self.assertEqual(p.read_bytes(), b"a\nb\n")
+
+    def test_app_data_and_crew_dir_per_platform(self):
+        old = dict(os.environ)
+        try:
+            os.environ.pop("KB_CREW_DIR", None)
+            kb.WINDOWS = True
+            os.environ["APPDATA"] = str(self.tmp / "Roaming")
+            self.assertEqual(kb.crew_dir(), self.tmp / "Roaming" / "Mindmill" / "crew")
+            self.assertEqual(kb.scans_dir(), self.tmp / "Roaming" / "Mindmill" / "scans")
+            kb.WINDOWS = False
+            self.assertEqual(kb.crew_dir(), Path("~/Library/Application Support/KB/crew").expanduser())
+            os.environ["KB_CREW_DIR"] = str(self.tmp / "c")
+            self.assertEqual(kb.crew_dir(), self.tmp / "c")
+        finally:
+            kb.WINDOWS = os.name == "nt"
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_lock_is_exclusive(self):
+        path = self.tmp / "l.lock"
+        with open(path, "w") as f:
+            kb.lock_exclusive(f)
+            code = ("import sys; sys.path.insert(0, sys.argv[1]); import kb\n"
+                    "f = open(sys.argv[2], 'w')\n"
+                    "import fcntl\n"
+                    "try:\n    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept OSError:\n    sys.exit(3)\n")
+            if os.name != "nt":
+                r = subprocess.run([sys.executable, "-c", code, str(PLUGIN / "scripts"), str(path)])
+                self.assertEqual(r.returncode, 3)
+
+    def test_command_source_quotes_the_query(self):
+        r = kb.run_shell("printf '%s' {query}", "it's a $test", None, 10)
+        self.assertEqual(r.stdout, "it's a $test")
+
+    def test_bin_kb_runs_python(self):
+        r = subprocess.run(["sh", str(PLUGIN / "bin" / "kb"), "resolve"], cwd=self.repo_a, env=self.env,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "app-a")
+        hooks = json.loads((PLUGIN / "hooks" / "hooks.json").read_text())
+        for event in hooks["hooks"].values():
+            for h in event[0]["hooks"]:
+                self.assertTrue(h["command"].startswith('"${CLAUDE_PLUGIN_ROOT}/bin/kb" hook '), h)

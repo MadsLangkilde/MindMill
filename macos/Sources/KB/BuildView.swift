@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Plan ⇄ Build, in the main window's toolbar.
@@ -96,6 +97,9 @@ struct BuildView: View {
         // The sidebar floats over the window: behind it goes the same colour as the session beside it, not the
         // window's black.
         .background(Color(hex: theme.contentBackground) ?? Color(nsColor: .textBackgroundColor))
+        // Opened straight into Build, the window kept the toolbar's own grey band above the session until Plan had
+        // been shown once; hidden, the toolbar shows the session colour as it does after that.
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Toggle(isOn: $myWorkSide) {
@@ -107,9 +111,19 @@ struct BuildView: View {
         .onAppear { model.startCrewEngine() }
     }
 
-    @ViewBuilder private var detail: some View {
+    /// Every Build screen sits on the session colour, which also shows behind the floating sidebar, so no screen
+    /// (the overview while it loads, a factory, Test, a PR) leaves a seam against it.
+    private var detail: some View {
+        detailContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(hex: theme.contentBackground) ?? Color(nsColor: .textBackgroundColor))
+    }
+
+    @ViewBuilder private var detailContent: some View {
         if model.buildSelection == AppModel.testTag {
             TestView()
+        } else if model.buildSelection == AppModel.readyTag {
+            ReadyToStartView()
         } else if model.buildSelection?.hasPrefix(AppModel.factoryTag) == true {
             FactoryView(factoryID: model.selectedFactoryID)
         } else if let raw = model.buildSelection, raw.hasPrefix("pr:"), let id = Int(raw.dropFirst(3)) {
@@ -249,6 +263,7 @@ struct BuildSidebar: View {
                     FactorySidebarRow().tag(AppModel.factoryTag)
                 }
                 if query.isEmpty { TestSidebarRow().tag(AppModel.testTag) }
+                if query.isEmpty { ReadySidebarRow().tag(AppModel.readyTag) }
                 if query.isEmpty, !model.factories.isEmpty {
                     Section {
                         ForEach(model.factories) { f in

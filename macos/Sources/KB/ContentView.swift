@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 struct ContentView: View {
@@ -22,7 +23,7 @@ struct ContentView: View {
                 OnboardingView()
             } else if model.mode == .build {
                 BuildView()
-                    .transition(ModeTransition.value)
+                    .modifier(ModeFadeIn())
             } else {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
                     SidebarView()
@@ -41,10 +42,9 @@ struct ContentView: View {
                 )
                 .modifier(SearchFocus(focused: $searchFocused))
                 .onChange(of: model.findRequest) { _, _ in if model.mode == .plan { searchFocused = true } }
-                .transition(ModeTransition.value)
+                .modifier(ModeFadeIn())
             }
         }
-        .animation(.easeOut(duration: 0.22), value: model.mode)
         // A new identity after Reset Layout, so the split views lay out again from the standard widths.
         .id(model.layoutGeneration)
         if let notice = model.notice {
@@ -59,6 +59,9 @@ struct ContentView: View {
                     .sharedBackgroundVisibility(.hidden)
             } else {
                 ToolbarItem(placement: .navigation) { ModePicker() }
+            }
+            if !model.showOnboarding && !model.index.groups.isEmpty {
+                ToolbarItem(placement: .navigation) { ProjectSwitcher() }
             }
             ToolbarItem(placement: .primaryAction) { SyncButton() }
             ToolbarItem(placement: .primaryAction) {
@@ -77,10 +80,10 @@ struct ContentView: View {
             FactoryRulesSheet(request: request)
         }
         .sheet(item: $model.addProjectRequest) { request in
-            AddProjectSheet(request: request)
+            ProjectsSheet(start: request.project.map { .project($0, addLocation: true) } ?? .new)
         }
         .sheet(isPresented: $model.scopesSheet) {
-            ScopesSheet()
+            ProjectsSheet(start: .current)
         }
         .sheet(isPresented: $signIn.showSheet) {
             ClaudeSignInSheet()
@@ -153,6 +156,7 @@ struct ContentView: View {
         .sheet(item: $model.implementRequest) { request in
             ImplementSheet(request: request)
         }
+        .sheet(item: $model.sprintReviewRequest) { SprintReviewSheet(request: $0) }
         .sheet(item: $model.backlogCreateRequest) { request in
             BacklogBatchCreateSheet(request: BacklogBatchRequest(entries: [request.entry]))
         }
@@ -383,22 +387,7 @@ struct SidebarView: View {
         }
     }
 
-    static func icon(_ s: KBSection) -> String {
-        switch s {
-        case .overview: return "doc.text"
-        case .decisions: return "checkmark.seal"
-        case .meetings: return "person.2"
-        case .facts: return "lightbulb"
-        case .architecture: return "building.columns"
-        case .followups: return "checklist"
-        case .backlog: return "list.bullet.rectangle"
-        case .discussions: return "bubble.left.and.bubble.right"
-        case .ideas: return IdeaRow.icon
-        case .research: return ResearchStatus.icon
-        case .references: return "bookmark"
-        case .inbox: return "tray.and.arrow.down"
-        }
-    }
+    static func icon(_ s: KBSection) -> String { s.icon }
 }
 
 /// Cross-project: the day plan sits above the project picker.
@@ -441,33 +430,102 @@ struct TodayRow: View {
     }
 }
 
+/// The project menu: every project with its scopes, and where to set them up.
+struct ProjectMenuItems: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ForEach(model.index.groups) { g in
+            Section(g.title) {
+                ForEach(g.scopes.compactMap { model.index.project($0) }) { p in
+                    Button {
+                        model.selectProject(p.id)
+                    } label: {
+                        if p.id == model.projectID {
+                            Label(p.title, systemImage: "checkmark")
+                        } else {
+                            Text(p.title)
+                        }
+                    }
+                }
+            }
+        }
+        Divider()
+        Button("New Project…") { model.addProjectRequest = AddProjectRequest() }
+        Button("Edit Projects and Scopes…") { model.scopesSheet = true }
+    }
+}
+
+/// The current project and scope in the toolbar, in Plan and Build alike; a click switches.
+struct ProjectSwitcher: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Menu {
+            ProjectMenuItems()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "square.stack.3d.up")
+                Text(label)
+            }
+        }
+        .fixedSize()
+        .help("Switch project or scope (⌃⌘1–9 picks a project)")
+    }
+
+    private var label: String {
+        guard let p = model.project else { return "No project" }
+        guard let g = model.selectedGroup else { return p.title }
+        return p.wide || g.title == p.title ? g.title : "\(g.title) · \(p.title)"
+    }
+}
+
 struct ProjectPicker: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text((model.selectedGroup?.title ?? "Project").uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
+            Menu {
+                ForEach(model.index.groups) { g in
+                    Button {
+                        model.selectGroup(g.id)
+                    } label: {
+                        if g.id == model.selectedGroup?.id {
+                            Label(g.title, systemImage: "checkmark")
+                        } else {
+                            Text(g.title)
+                        }
+                    }
+                }
+                Divider()
+                Button("New Project…") { model.addProjectRequest = AddProjectRequest() }
+                Button("Edit Projects and Scopes…") { model.scopesSheet = true }
+            } label: {
+                Text((model.selectedGroup?.title ?? "Project").uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(model.index.groups.count > 1 ? .visible : .hidden)
+            .fixedSize()
+            .help("Switch project")
             HStack(spacing: 6) {
                 Menu {
-                    ForEach(model.index.groups) { g in
-                        Section(g.title) {
-                            ForEach(g.scopes.compactMap { model.index.project($0) }) { p in
-                                Button {
-                                    model.selectProject(p.id)
-                                } label: {
-                                    if p.id == model.projectID {
-                                        Label(p.title, systemImage: "checkmark")
-                                    } else {
-                                        Text(p.title)
-                                    }
+                    if let g = model.selectedGroup {
+                        ForEach(g.scopes.compactMap { model.index.project($0) }) { p in
+                            Button {
+                                model.selectProject(p.id)
+                            } label: {
+                                if p.id == model.projectID {
+                                    Label(p.title, systemImage: "checkmark")
+                                } else {
+                                    Text(p.title)
                                 }
                             }
                         }
                     }
                     Divider()
-                    Button("Projects and Scopes…") { model.scopesSheet = true }
+                    Button("Edit Projects and Scopes…") { model.scopesSheet = true }
                 } label: {
                     Text(model.project?.title ?? "No scope")
                         .font(.title3.weight(.semibold))
@@ -964,8 +1022,16 @@ struct DecisionsColumn: View {
 
 /// Switching between Plan and Build: the new mode fades in over the old one's place. The old one goes at once, so the
 /// two split views never share the window, and so never the column widths AppKit saves for it.
-enum ModeTransition {
-    static let value = AnyTransition.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.995)), removal: .identity)
+/// Plan and Build fade in when switched to. Only the opacity animates: an animated mode change would also animate the
+/// toolbar and sidebar settling into the other mode's layout, which slides the panes.
+private struct ModeFadeIn: ViewModifier {
+    @State private var shown = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .onAppear { withAnimation(.easeOut(duration: 0.2)) { shown = true } }
+    }
 }
 
 /// ⌘F puts the cursor in Plan's search field (macOS 15 and later).

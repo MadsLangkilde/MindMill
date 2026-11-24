@@ -74,6 +74,122 @@ SCOPE_ADDED_KEYS = ("project", "project_title")
 
 TEAM_SECTIONS = ("decisions", "facts", "architecture", "followups", "backlog", "overview")
 TEAM_FOLDER = "knowledgebase"
+WINDOWS = os.name == "nt"
+# Written into a new team folder so Git keeps shared entries in LF on every platform.
+TEAM_GITATTRIBUTES = "* text=auto eol=lf\n"
+
+
+def app_data_dir() -> Path:
+    """Mindmill's own data, outside the KB: `%APPDATA%\\Mindmill` on Windows, `~/Library/Application Support/KB` on a Mac."""
+    if WINDOWS:
+        base = os.environ.get("APPDATA") or str(Path("~/AppData/Roaming").expanduser())
+        return Path(base) / "Mindmill"
+    return Path("~/Library/Application Support/KB").expanduser()
+
+
+def lock_exclusive(f) -> None:
+    """Blocks until this process holds the lock on the open file `f`, until it is closed or the process ends."""
+    if WINDOWS:
+        import msvcrt
+        f.seek(0)
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                time.sleep(0.1)
+    import fcntl
+    fcntl.flock(f, fcntl.LOCK_EX)
+
+
+def git_bash() -> str | None:
+    """Git for Windows' bash, which Claude Code on Windows uses too (`CLAUDE_CODE_GIT_BASH_PATH`)."""
+    import shutil
+    candidates = [os.environ.get("CLAUDE_CODE_GIT_BASH_PATH", "")]
+    for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        if os.environ.get(var):
+            candidates.append(os.path.join(os.environ[var], "Git", "bin", "bash.exe"))
+    found = shutil.which("bash")
+    if found and "\\system32\\" not in found.lower():
+        candidates.append(found)
+    return next((c for c in candidates if c and os.path.isfile(c)), None)
+
+
+def run_shell(template: str, value: str, cwd: str | None, timeout: int) -> subprocess.CompletedProcess:
+    """Runs a user's command line with `{query}` replaced by `value`, quoted for the shell that runs it: sh on a Mac,
+    Git Bash on Windows (so the same POSIX command lines work), cmd.exe only when there is no Git Bash."""
+    import shlex
+    if not WINDOWS:
+        return subprocess.run(template.replace("{query}", shlex.quote(value)), shell=True, capture_output=True,
+                              text=True, timeout=timeout, cwd=cwd)
+    bash = git_bash()
+    if bash:
+        return subprocess.run([bash, "-c", template.replace("{query}", shlex.quote(value))], capture_output=True,
+                              text=True, timeout=timeout, cwd=cwd)
+    return subprocess.run(template.replace("{query}", subprocess.list2cmdline([value])), shell=True,
+                          capture_output=True, text=True, timeout=timeout, cwd=cwd)
+
+
+# Names Windows refuses for files or folders. Entries are shared with Windows users through the repositories' Git.
+WINDOWS_RESERVED = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
+
+
+def windows_name_problem(name: str) -> str | None:
+    """Why Windows can't have a file or folder called `name`, or None when it can."""
+    bad = sorted({c for c in name if c in '<>:"/\\|?*' or ord(c) < 32})
+    if bad:
+        return "has " + " ".join(repr(c) for c in bad) + ", which Windows doesn't allow in names"
+    if name.endswith((".", " ")):
+        return "ends with a dot or a space, which Windows drops"
+    if name.split(".")[0].strip().lower() in WINDOWS_RESERVED:
+        return f"uses {name.split('.')[0].strip().upper()}, a name Windows reserves"
+    if len(name.encode("utf-8")) > 255:
+        return "is longer than 255 bytes"
+    return None
+
+
+def case_clashes(names: list[str]) -> list[list[str]]:
+    """Names in one folder that differ only by case: one file on Windows and on a default Mac volume."""
+    groups: dict[str, list[str]] = {}
+    for n in names:
+        groups.setdefault(n.casefold(), []).append(n)
+    return [sorted(g) for g in groups.values() if len(g) > 1]
+
+
+def portability_problems(base: Path, label: str) -> list[str]:
+    """File and folder names under `base` that Windows rejects or folds together, as `kb lint` lines."""
+    out: list[str] = []
+    if not base.is_dir():
+        return out
+    for folder, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        here = Path(folder)
+        rel = here.relative_to(base).as_posix()
+        prefix = label if rel == "." else f"{label}/{rel}"
+        for name in dirs + files:
+            why = windows_name_problem(name)
+            if why:
+                out.append(f"{prefix}/{name}: {why}")
+        for group in case_clashes(dirs + files):
+            out.append(f"{prefix}: {', '.join(group)} differ only by case; Windows keeps one of them")
+    return out
+
+
+def team_folder_of(path: Path) -> Path | None:
+    """The `knowledgebase/` folder of a repository that `path` is in, if it is in one."""
+    for parent in path.parents:
+        if parent.name == TEAM_FOLDER and (parent.parent / ".git").exists():
+            return parent
+    return None
+
+
+def prepare_team_folder(path: Path) -> None:
+    """Before writing `path`: a team folder being made for it gets a `.gitattributes` that keeps line endings LF."""
+    team = team_folder_of(path)
+    if team is None or team.exists():
+        return
+    team.mkdir(parents=True, exist_ok=True)
+    (team / ".gitattributes").write_bytes(TEAM_GITATTRIBUTES.encode("utf-8"))
 
 
 def is_split(root: Path) -> bool:
@@ -527,9 +643,10 @@ def by_date_desc(entries: list[Entry]) -> list[Entry]:
 
 def write_atomic(path: Path, text: str) -> None:
     new = not path.exists()
+    prepare_team_folder(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    tmp.write_bytes(text.encode("utf-8"))
     os.replace(tmp, path)
     note_entry_write(path, new)
 
@@ -577,7 +694,7 @@ def save_sharing_file(root: Path, sid: str, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
     out = {"shared": dict(sorted(data["shared"].items())), "branches": data.get("branches") or {}}
-    tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+    tmp.write_bytes((json.dumps(out, indent=2) + "\n").encode("utf-8"))
     os.replace(tmp, path)
 
 
@@ -665,6 +782,7 @@ def is_draft_file(path: Path) -> bool:
 
 def copy_entry(src: Path, dst: Path) -> None:
     import shutil
+    prepare_team_folder(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(f".{dst.name}.tmp")
     shutil.copy2(src, tmp)
@@ -1170,17 +1288,17 @@ The index above is a title list. Read a full entry (`{kb} show <id>`, or Read th
    your first reply with a short **From the KB** block: at most five one-line bullets citing entry ids, and
    suggestions only where an entry changes how the task should be done. Say nothing when nothing is relevant.
 2. **The user overrides the KB.** If they decide against an entry in force, do it their way, then record it
-   with the `kb:decide` skill: a new decision that supersedes the old one. Tell them in one line which entry
+   with the `mindmill:decide` skill: a new decision that supersedes the old one. Tell them in one line which entry
    you superseded. Never edit an old decision's body.
 3. **New durable knowledge** the user tells you (something is done or dropped, a decision, a constraint, a fact
    about another team or system, a new action) goes in the KB, not in Claude's auto-memory or only in meeting
-   notes. If the user asked for it, write it (`kb:decide`, `kb new fact`, `kb new followup`). If they only
+   notes. If the user asked for it, write it (`mindmill:decide`, `kb new fact`, `kb new followup`). If they only
    mentioned it ("that's done already"), check whether the KB has it, then ask once (AskUserQuestion, or a
    `choices` block in the Mindmill app) what to record and where, for example "Follow-up in <scope>, marked done",
    and write it on yes. Pick the scope by what the item is about (rule 6). Only what you noticed
    yourself, without the user saying it, is proposed through `kb inbox add … --proposed-by session:<session id>`.
-4. **Meetings** run through `kb:meeting` (and `kb:prep`); work items through `kb:work-item`; questions
-   that need more than the index through `kb:ask`; "start my day" through `kb:today`.
+4. **Meetings** run through `mindmill:meeting` (and `mindmill:prep`); work items through `mindmill:work-item`; questions
+   that need more than the index through `mindmill:ask`; "start my day" through `mindmill:today`.
 5. Entries can be edited by the user at any time in the Mindmill app. The prompt hook reports files that changed
    since your last turn; reread those before using them.
 6. **Scopes.** Everything you write goes under this session's scope `{pid}` unless it belongs elsewhere. A
@@ -1565,6 +1683,8 @@ def cmd_new(a) -> int:
     pid = target_project(root, a.project, a.cross_project)
     section = KIND_TO_SECTION[a.kind]
     date = a.date or dt.date.today().isoformat()
+    if section == "followups":
+        refuse_backlog_followup(a.title)
     fields = fields_from_args(a, section, date)
     check_status(section, fields)
     fields = [(k, v) for k, v in fields if k != "scopes"]
@@ -1616,6 +1736,8 @@ def inbox_add(a) -> int:
     pid = target_project(root, a.project, a.cross_project)
     if a.section not in APPROVABLE:
         sys.exit(f"kb: --section must be one of {', '.join(APPROVABLE)}")
+    if a.section == "followups":
+        refuse_backlog_followup(a.title)
     date = a.date or dt.date.today().isoformat()
     fields = fields_from_args(a, a.section, date)
     check_status(a.section, fields)
@@ -1781,7 +1903,7 @@ CREW_STALE_SECONDS = 120
 
 def crew_dir() -> Path:
     env = os.environ.get("KB_CREW_DIR", "").strip()
-    return Path(os.path.expanduser(env)) if env else Path("~/Library/Application Support/KB/crew").expanduser()
+    return Path(os.path.expanduser(env)) if env else app_data_dir() / "crew"
 
 
 def crew_state() -> dict:
@@ -1868,9 +1990,9 @@ def queue_order(order: dict) -> Path:
 
 SYNC_KINDS = ("calendar", "email", "tracker", "prs")
 SYNC_OFFLINE = {
-    "calendar": "the Mindmill app isn't running, so it can't sync the calendar. Run the kb:calendar skill yourself for "
+    "calendar": "the Mindmill app isn't running, so it can't sync the calendar. Run the mindmill:calendar skill yourself for "
                 "{span}; it mirrors Outlook into the meeting files the same way.",
-    "email": "the Mindmill app isn't running, so it can't scan email. Run the kb:email skill yourself.",
+    "email": "the Mindmill app isn't running, so it can't scan email. Run the mindmill:email skill yourself.",
     "tracker": "nothing to sync without the Mindmill app: `kb tracker` reads Azure DevOps live.",
     "prs": "nothing to sync without the Mindmill app: `kb pr list` and `kb pr show` read Azure DevOps live.",
 }
@@ -2081,7 +2203,7 @@ SCAN_RUN_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$")
 
 def scans_dir() -> Path:
     env = os.environ.get("KB_SCANS_DIR", "").strip()
-    return Path(os.path.expanduser(env)) if env else Path("~/Library/Application Support/KB/scans").expanduser()
+    return Path(os.path.expanduser(env)) if env else app_data_dir() / "scans"
 
 
 def scan_file(run: str) -> Path:
@@ -2107,7 +2229,7 @@ def scan_events(path: Path) -> list[dict]:
 
 def scan_append(path: Path, event: dict) -> None:
     event.setdefault("at", iso_now())
-    with path.open("a", encoding="utf-8") as f:
+    with path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
@@ -2496,8 +2618,67 @@ def merge_followups(root: Path, keep: Entry, others: list[Entry]) -> None:
     save_followup_merges(root, data)
 
 
+BACKLOG_TASK_RE = re.compile(
+    r"^\s*(?:create|opret|lav|add|write|raise|propose)\s+(?:(?:an?|the|new|some|two|both|en|et|nye?)\s+)*"
+    r"(?:(?:[\w./&-]+\s+){0,3}?)"
+    r"(?:pbi\(s\)|(?:pbis?|bugs?|backlog[- ]items?|work[- ]items?|user stor(?:y|ies)|tickets?)\b)"
+    r"(?:\s*(?:for|to|about|on|covering|til|om|:|-|–)\s+(?P<rest>.*)|[\s.]*)$", re.I)
+
+
+def backlog_task_title(title: str) -> str | None:
+    """For a follow-up whose only point is to create a PBI or bug ("Create an Android PBI for X"): the work it names
+    ("X"), or the title itself when it names nothing more. None for any other follow-up."""
+    m = BACKLOG_TASK_RE.match(title or "")
+    if not m:
+        return None
+    rest = (m.group("rest") or "").strip().rstrip(".")
+    return (rest[:1].upper() + rest[1:]) if rest else title.strip()
+
+
+def refuse_backlog_followup(title: str) -> None:
+    if backlog_task_title(title) is not None:
+        sys.exit(f"kb: “{title}” is work for the tracker, not a follow-up. Propose it as a backlog item instead "
+                 "(`kb new backlog --status proposed --field kind=pbi|bug --source <where it came from> …`, the "
+                 "mindmill:work-item skill); it waits under Backlog → Suggested backlog items and is checked against the "
+                 "tracker for duplicates.")
+
+
+def followup_to_backlog(root: Path, e: "Entry") -> str:
+    """Turns a "create a PBI" follow-up into a suggested backlog item and closes the follow-up as done, pointing at
+    it. A backlog entry already made from the same source with the same work is reused rather than made twice."""
+    title = backlog_task_title(e.title) or e.title
+    kind = "bug" if re.search(r"\bbugs?\b", e.title, re.I) else "pbi"
+    source = str(e.get("source") or e.get("raised_in") or e.id)
+    bare = bare_title(title).lower()
+    existing = next((x for x in backlog_entries(root) if x.project == e.project and x.status in ("proposed", "created")
+                     and (bare_title(x.title).lower() == bare or (str(x.get("source") or "") == source
+                                                                    and dice(dup_words(bare_title(x.title)), dup_words(bare)) >= 0.5))),
+                    None)
+    if existing:
+        new_id = existing.id
+    else:
+        date = dt.date.today().isoformat()
+        fields = [("title", title), ("date", date), ("status", "proposed"), ("kind", kind),
+                  ("summary", str(e.get("summary") or "")), ("source", source)]
+        fields += scopes_field(as_list(e.get("scopes")))
+        path = entry_path(root, e.project, "backlog", title, date)
+        body = re.split(r"(?m)^## Updates\s*$", e.body)[0].strip()
+        write_atomic(path, render_entry([(k, v) for k, v in fields if v not in ("", None, [])], body + "\n" if body else ""))
+        new_id = f"{e.project}/backlog/{path.stem}"
+    e.set("status", "done")
+    e.set("resolved_by", resolved_by_value([new_id]))
+    e.save()
+    return new_id
+
+
 def cmd_followup(a) -> int:
     root = kb_root()
+    if a.action == "to-backlog":
+        e = find_entry(root, a.id)
+        if not e or e.section != "followups":
+            sys.exit(f"kb: no follow-up {a.id}")
+        print(followup_to_backlog(root, e))
+        return 0
     if a.action == "merges":
         data = load_followup_merges(root)
         if a.dismiss:
@@ -2716,7 +2897,7 @@ def ado_sprints(tracker: dict, pat: str) -> list[dict]:
         out = [s for s in out if s["path"].startswith(root_prefix + "\\")]
     today = dt.date.today().isoformat()
     for s in out:
-        s["when"] = "current" if s["start"] <= today <= s["finish"] else ("past" if s["finish"] < today else "future")
+        s["when"] = sprint_when(s, today, out)
     return sorted(out, key=lambda s: s["start"])
 
 
@@ -3001,7 +3182,7 @@ def tracker_backlog(root: Path, done_days: int = 14, sprint: str | None = None, 
             out["sprints"][sc["id"]] = cur["name"]
         listed = {x["path"] for x in out.setdefault("sprint_list", [])}
         out["sprint_list"] += [{"name": x["name"], "path": x["name"], "start": x["start"], "finish": x["finish"],
-                                "when": sprint_when(x)} for x in data["sprints"] if x["name"] not in listed]
+                                "when": sprint_when(x, sprints=data["sprints"])} for x in data["sprints"] if x["name"] not in listed]
         out["sprint_list"].sort(key=lambda x: x["start"])
     return out
 
@@ -3180,9 +3361,12 @@ def pr_summary(org: str, proj: str, owners, api: str, pat: str, pr: dict, with_t
 
 
 def my_pull_requests(root: Path) -> dict:
-    pat = ado_pat()
     out = {"fetched": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "prs": [], "closed": []}
-    for (org, proj), owners in ado_trackers(root).items():
+    trackers = ado_trackers(root)
+    if not trackers:
+        return out
+    pat = ado_pat()
+    for (org, proj), owners in trackers.items():
         api = f"https://dev.azure.com/{org}/{urllib.parse.quote(proj)}/_apis"
         me = ado_request("GET", f"https://dev.azure.com/{org}/_apis/connectionData", pat).get("authenticatedUser") or {}
         prs = ado_request("GET", f"{api}/git/pullrequests?searchCriteria.status=active&searchCriteria.creatorId={me.get('id', '')}"
@@ -3632,6 +3816,52 @@ def start_work_item(root: Path, sid: str, iid: int) -> str:
     return f"#{iid} is now {target}"
 
 
+def resolved_state(current: str, states: list[dict]) -> str | None:
+    """The state that marks a PBI or bug as finished: the type's Resolved state when it has one (an Agile bug's
+    Resolved, for testing to close), else its first Completed state (Done in Scrum, Closed in Agile). None when the
+    item is already there or past it."""
+    order = workflow_order(states)
+    category = next((s["category"] for s in states if s["name"].lower() == current.lower()), None)
+    if category in ("Resolved", "Completed", "Removed"):
+        return None
+    return next((s["name"] for s in order if s["category"] == "Resolved"), None) or \
+        next((s["name"] for s in order if s["category"] == "Completed"), None)
+
+
+def resolve_work_item(root: Path, sid: str, iid: int) -> str:
+    """Moves a PBI or bug to its resolved (or done) state, for work that turned out finished."""
+    tracker = load_settings(root, sid).get("tracker") or {}
+    kind = tracker.get("kind")
+    if kind == "local":
+        data = load_work(root, sid)
+        item = find_work_item(data, iid)
+        target = resolved_state(item["state"], SCRUM_STATES)
+        if not target:
+            return f"#{iid} is already {item['state']}"
+        update_work_item(data, iid, {"state": target})
+        save_work(root, sid, data)
+        return f"#{iid} is now {target}"
+    if kind != "azure-devops":
+        sys.exit(f"kb: {sid} tracks work in {kind or 'no tracker'}; resolve it with Claude's connector for it")
+    if missing := ado_tracker_missing(tracker):
+        sys.exit(f"kb: {sid}'s azure-devops tracker has no {' or '.join(missing)}")
+    api = f"https://dev.azure.com/{tracker['organization']}/{urllib.parse.quote(tracker['project'])}/_apis"
+    pat = ado_pat()
+    try:
+        f = ado_request("GET", f"{api}/wit/workitems/{iid}?fields=System.State,System.WorkItemType&api-version=7.1", pat)["fields"]
+        got = ado_request("GET", f"{api}/wit/workitemtypes/{urllib.parse.quote(f['System.WorkItemType'])}/states?api-version=7.1", pat)
+        target = resolved_state(f["System.State"], [{"name": x["name"], "category": x.get("category", "")}
+                                                    for x in got.get("value", [])])
+        if not target:
+            return f"#{iid} is already {f['System.State']}"
+        ado_request("PATCH", f"{api}/wit/workitems/{iid}?api-version=7.1", pat,
+                    [{"op": "add", "path": "/fields/System.State", "value": target}],
+                    content_type="application/json-patch+json")
+    except urllib.error.HTTPError as e:
+        sys.exit(f"kb: #{iid}: Azure DevOps said {e.code}: {ado_error_detail(e, 300)}")
+    return f"#{iid} is now {target}"
+
+
 def discussion_section_append(body: str, heading: str, line: str) -> str:
     """Adds `line` at the end of the `## heading` section, creating the section before Outcome when missing."""
     lines = body.rstrip("\n").split("\n") if body.strip() else []
@@ -3836,8 +4066,62 @@ def tracker_note(root: Path, sid: str | None, iid: int, text: str, heading: str,
         sys.exit(f"kb: #{iid}: Azure DevOps said {e.code}: {ado_error_detail(e, 300)}")
 
 
+def tracker_find(root: Path, sid: str, query: str, limit: int = 10) -> dict:
+    """Work items of the scope's tracker whose id is the query or whose title has every word of it, for picking a
+    parent or related item: open ones first, then the most recently changed. Tasks and removed items are left out."""
+    q = query.strip().lstrip("#!").strip()
+    tracker = load_settings(root, sid).get("tracker") or {}
+    kind = tracker.get("kind") or ""
+    words = [w for w in q.split() if w.strip("#!")]
+    if not q:
+        return {"kind": kind, "items": []}
+    if kind == "local":
+        data = load_work_or_warn(root, sid) or {"items": []}
+        rows = [i for i in data["items"] if i.get("type") != "task" and i.get("state") != "Removed"
+                and (str(i["id"]) == q or all(w.lower() in i["title"].lower() for w in words))]
+        rows.sort(key=lambda i: (str(i["id"]) != q, i.get("state") in ("Done", "Closed"), -int(i["id"])))
+        return {"kind": kind, "items": [{"id": i["id"], "type": i["type"], "title": i["title"], "state": i["state"],
+                                         "url": ""} for i in rows[:limit]]}
+    if kind != "azure-devops" or ado_tracker_missing(tracker):
+        return {"kind": kind, "items": [], "note": "this tracker can't be searched from Mindmill"}
+    org, project = tracker["organization"], tracker["project"]
+    base = f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_apis"
+    pat = ado_pat()
+    title = " AND ".join(f"[System.Title] CONTAINS '{wiql_text(w)}'" for w in words)
+    match = f"([System.Id] = {int(q)} OR ({title}))" if q.isdigit() else f"({title})"
+    wiql = {"query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project "
+                     "AND [System.WorkItemType] NOT IN ('Task', 'Test Case', 'Test Plan', 'Test Suite') "
+                     f"AND [System.State] <> 'Removed' AND {match} ORDER BY [System.ChangedDate] DESC"}
+    ids = [w["id"] for w in ado_request("POST", f"{base}/wit/wiql?api-version=7.1&$top=60", pat,
+                                        wiql).get("workItems", [])][:60]
+    items = []
+    if ids:
+        got = ado_request("GET", f"https://dev.azure.com/{org}/_apis/wit/workitems?ids={','.join(map(str, ids))}"
+                                 "&fields=System.Title,System.State,System.WorkItemType&api-version=7.1", pat)
+        for w in got.get("value", []):
+            f = w.get("fields") or {}
+            items.append({"id": w["id"], "type": f.get("System.WorkItemType", ""), "title": f.get("System.Title", ""),
+                          "state": f.get("System.State", ""),
+                          "url": f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_workitems/edit/{w['id']}"})
+    order = {i: n for n, i in enumerate(ids)}
+    items.sort(key=lambda i: (str(i["id"]) != q, i["state"] in ("Done", "Closed"), order.get(i["id"], 0)))
+    return {"kind": kind, "items": items[:limit]}
+
+
 def cmd_tracker(a) -> int:
     root = kb_root()
+    if a.action == "find":
+        sid = a.project or current_project_id(root)
+        try:
+            out = tracker_find(root, sid, a.query, a.limit)
+        except urllib.error.HTTPError as e:
+            sys.exit(f"kb: Azure DevOps said {e.code} {e.reason}")
+        if a.json:
+            print(json.dumps(out, indent=2, ensure_ascii=False))
+        else:
+            for i in out["items"]:
+                print(f"#{i['id']}\t{i['type']}\t{i['state']}\t{i['title']}")
+        return 0
     if a.action == "note":
         text = sys.stdin.read() if a.text in (None, "-") else a.text
         print(tracker_note(root, a.project, int(a.id.lstrip("#")), text, a.heading or "", a.comment))
@@ -3883,6 +4167,15 @@ def cmd_tracker(a) -> int:
             sys.exit("kb: writing tags to the tracker needs --yes, after the user confirmed exactly which tags")
         print(align_item_tags(root, int(a.id.lstrip("#"))))
         return 0
+    if a.action == "resolve":
+        if not a.yes:
+            sys.exit("kb: resolving changes the tracker; pass --yes after the user said to resolve it")
+        sid = a.project or current_project_id(root)
+        try:
+            print(resolve_work_item(root, sid, int(a.id.lstrip("#"))))
+        except (WorkError, ValueError) as e:
+            sys.exit(f"kb: {e}")
+        return 0
     if a.action == "start":
         sid = a.project or current_project_id(root)
         try:
@@ -3915,7 +4208,12 @@ def cmd_tracker(a) -> int:
         return 0
     if a.action == "move":
         path = a.sprint
-        if path in ("current", "next"):
+        if a.backlog:
+            t = load_settings(root, a.project or current_project_id(root)).get("tracker") or {}
+            if t.get("kind") != "azure-devops" or ado_tracker_missing(t):
+                sys.exit("kb: that scope has no azure-devops tracker")
+            path = ado_backlog_iteration(t)
+        elif path in ("current", "next"):
             t = load_settings(root, a.project or current_project_id(root)).get("tracker") or {}
             path = ado_sprint(t, ado_pat(), path)
             if not path:
@@ -3965,7 +4263,7 @@ def cmd_tracker(a) -> int:
                      "[System.WorkItemType] IN (" + ", ".join("'" + t.replace("'", "''") + "'" for t in types) + ")",
                      "[System.State] NOT IN ('Closed', 'Done', 'Removed')"]
             if a.search:
-                where.append(f"[System.Title] CONTAINS '{a.search.replace(chr(39), chr(39) * 2)}'")
+                where += [f"[System.Title] CONTAINS '{wiql_text(w)}'" for w in a.search.split() if w.strip("#!")]
             if a.area or tracker.get("area_path"):
                 where.append(f"[System.AreaPath] UNDER '{(a.area or tracker['area_path']).replace(chr(39), chr(39) * 2)}'")
             wiql = {"query": "SELECT [System.Id] FROM WorkItems WHERE " + " AND ".join(where) +
@@ -4150,14 +4448,21 @@ def next_order(data: dict, parent: int | None, but: int | None = None) -> float:
 
 
 def current_sprint(sprints: list[dict], today: str | None = None) -> dict | None:
+    """The sprint running today. On a changeover day, when one sprint's last day is the next one's first, the later one."""
     today = today or dt.date.today().isoformat()
-    return next((s for s in sorted(sprints, key=lambda s: s.get("start", ""))
+    return next((s for s in sorted(sprints, key=lambda s: s.get("start", ""), reverse=True)
                  if s.get("start", "") <= today <= s.get("finish", "")), None)
 
 
-def sprint_when(s: dict, today: str | None = None) -> str:
+def sprint_when(s: dict, today: str | None = None, sprints: list[dict] = ()) -> str:
+    """past, current or future. A sprint still in its dates is past once a later one among `sprints` has started."""
     today = today or dt.date.today().isoformat()
-    return "current" if s["start"] <= today <= s["finish"] else ("past" if s["finish"] < today else "future")
+    if s["finish"] < today:
+        return "past"
+    if s["start"] > today:
+        return "future"
+    superseded = any(s["start"] < o.get("start", "") <= today <= o.get("finish", "") for o in sprints)
+    return "past" if superseded else "current"
 
 
 def resolve_sprint(data: dict, raw: str | None, today: str | None = None) -> str:
@@ -4463,12 +4768,12 @@ def work_action(root: Path, sid: str, a) -> int:
             sprints = sorted(data["sprints"], key=lambda s: s.get("start", ""))
             if as_json:
                 print(json.dumps({"use_sprints": data["use_sprints"],
-                                  "sprints": [{**s, "when": sprint_when(s)} for s in sprints]}, indent=2, ensure_ascii=False))
+                                  "sprints": [{**s, "when": sprint_when(s, sprints=sprints)} for s in sprints]}, indent=2, ensure_ascii=False))
                 return 0
             if not data["use_sprints"]:
                 print("sprints are off; turn them on with `kb work sprint use on`")
             for s in sprints:
-                print(f"{sprint_when(s):<8} {s['start']}..{s['finish']}  {s['name']}")
+                print(f"{sprint_when(s, sprints=sprints):<8} {s['start']}..{s['finish']}  {s['name']}")
             return 0
         if a.sprint_action == "add":
             name = " ".join(a.name.split())
@@ -4504,6 +4809,377 @@ def work_action(root: Path, sid: str, a) -> int:
                 print(f"  #{i['id']}\t{i['type']}\t{i.get('assignee') or '-'}\t{i['title']}")
         return 0
     return 1
+
+
+# ---------------------------------------------------------------- sprints, whichever tracker
+#
+# `kb sprint status` gives each tracker's sprint running today, the one before it and the one after it, so the app
+# notices when a new sprint starts or one ends with nothing after it. `kb sprint review` lists what the previous
+# sprint left unfinished, `kb sprint apply` carries out the user's decisions on it, and `kb sprint create` adds the
+# next sprint where Mindmill can (its own tracker).
+
+ADO_ITERATIONS_HELP = "Azure DevOps (Project settings → Boards → Project configuration → Iterations, then select it for the team)"
+LOCAL_TASK_STATES = [{"name": "To Do", "category": "Proposed"}, {"name": "In Progress", "category": "InProgress"},
+                     {"name": "Done", "category": "Completed"}, {"name": "Removed", "category": "Removed"}]
+SPRINT_DECISIONS = ("state", "move", "backlog")
+
+
+def sprint_brief(s: dict | None) -> dict | None:
+    if not s:
+        return None
+    return {"name": s["name"], "path": s.get("path") or s["name"], "start": s["start"], "finish": s["finish"]}
+
+
+def sprint_neighbours(sprints: list[dict], today: str) -> dict:
+    """The sprint running today, the last one finished before it (before today when none runs), the first one after,
+    and `state`: running, between (one ended, the next is planned), ended (nothing after it), upcoming or none."""
+    dated = sorted((s for s in sprints if s.get("start") and s.get("finish")), key=lambda s: (s["start"], s["finish"]))
+    cur = next((s for s in reversed(dated) if s["start"] <= today <= s["finish"]), None)
+    prev = next((s for s in reversed(dated) if (s["start"] < cur["start"] if cur else s["finish"] < today)), None)
+    nxt = next((s for s in dated if s["start"] > (cur["finish"] if cur else today)), None)
+    state = "running" if cur else "between" if prev and nxt else "ended" if prev else "upcoming" if nxt else "none"
+    since = (dt.date.fromisoformat(today) - dt.date.fromisoformat(prev["finish"])).days if prev and not cur else None
+    return {"state": state, "current": sprint_brief(cur), "previous": sprint_brief(prev), "next": sprint_brief(nxt),
+            "days_since_end": since}
+
+
+def sprint_trackers(root: Path) -> list[dict]:
+    """Every tracker the scopes use, once: Azure DevOps by organization, project and iteration root (scopes sharing
+    them share sprints), any other kind per scope."""
+    groups: dict[str, dict] = {}
+    for sc in load_registry(root):
+        t = load_settings(root, sc["id"]).get("tracker") or {}
+        kind = str(t.get("kind") or "none")
+        if kind == "none" or (kind == "azure-devops" and ado_tracker_missing(t)):
+            continue
+        key = (f"azure-devops:{t['organization']}/{t['project']}:{t.get('iteration_root') or ''}"
+               if kind == "azure-devops" else f"{kind}:{sc['id']}")
+        groups.setdefault(key, {"key": key, "kind": kind, "scopes": [], "tracker": t})["scopes"].append(sc["id"])
+    return list(groups.values())
+
+
+def sprint_tracker_of(root: Path, sid: str) -> dict:
+    group = next((g for g in sprint_trackers(root) if sid in g["scopes"]), None)
+    if not group:
+        sys.exit(f"kb: {sid} has no tracker; set tracker.kind with `kb settings set` or in the Mindmill app")
+    return group
+
+
+def connector_name(kind: str) -> str:
+    return {"jira": "Jira", "github": "GitHub"}.get(kind, kind[:1].upper() + kind[1:])
+
+
+def ado_iterations_url(t: dict) -> str:
+    return f"https://dev.azure.com/{t['organization']}/{urllib.parse.quote(t['project'])}/_settings/work"
+
+
+def ado_backlog_iteration(t: dict) -> str:
+    """Where "no sprint" is in Azure DevOps: tracker.backlog_iteration, else the iteration root the sprints sit
+    under, else the project's root iteration."""
+    return t.get("backlog_iteration") or (t.get("iteration_root") or "").rstrip("\\") or t["project"]
+
+
+def tracker_sprint_status(root: Path, group: dict, today: str, pat: list | None = None) -> dict:
+    """One tracker's sprints around today. `pat` caches the Azure DevOps PAT between trackers."""
+    kind, t = group["kind"], group["tracker"]
+    out = {"key": group["key"], "kind": kind, "scopes": group["scopes"], "reachable": True, "state": "none",
+           "current": None, "previous": None, "next": None, "days_since_end": None, "can_create": False,
+           "create_url": "", "note": ""}
+    if kind == "local":
+        data = load_work_or_warn(root, group["scopes"][0])
+        if data is None:
+            return {**out, "reachable": False, "state": "unknown", "note": "its work.json can't be read"}
+        if not data["use_sprints"]:
+            return {**out, "state": "off", "note": "sprints are off for this scope"}
+        return {**out, **sprint_neighbours([{**s, "path": s["name"]} for s in data["sprints"]], today), "can_create": True}
+    if kind == "azure-devops":
+        out["create_url"] = ado_iterations_url(t)
+        try:
+            if pat is not None and not pat:
+                pat.append(ado_pat())
+            sprints = ado_sprints(t, pat[0] if pat else ado_pat())
+        except SystemExit as e:
+            return {**out, "reachable": False, "state": "unknown", "note": str(e.code).removeprefix("kb: ")}
+        except urllib.error.HTTPError as e:
+            return {**out, "reachable": False, "state": "unknown", "note": f"Azure DevOps said {e.code}: {ado_error_detail(e, 200)}"}
+        except urllib.error.URLError as e:
+            return {**out, "reachable": False, "state": "unknown", "note": f"could not reach Azure DevOps: {e.reason}"}
+        except (KeyError, TypeError, ValueError) as e:
+            return {**out, "reachable": False, "state": "unknown", "note": f"Azure DevOps sent iterations Mindmill can't read: {e}"}
+        out.update(sprint_neighbours(sprints, today))
+        if not t.get("iteration_root"):
+            out["note"] = ("tracker.iteration_root isn't set, so every dated iteration in the project counts; "
+                           "set it with `kb settings set tracker.iteration_root`")
+        return out
+    name = connector_name(kind)
+    return {**out, "reachable": False, "state": "unknown",
+            "note": f"{name} is read through Claude's {name} connector, not the kb CLI; ask Claude to check its sprints"}
+
+
+def sprint_status(root: Path, scope: str | None = None, today: str | None = None) -> dict:
+    today = today or dt.date.today().isoformat()
+    groups = [g for g in sprint_trackers(root) if not scope or scope in g["scopes"]]
+    pat: list = []
+    return {"today": today, "trackers": [tracker_sprint_status(root, g, today, pat) for g in groups]}
+
+
+def ado_states(api: str, pat: str, type_name: str) -> list[dict]:
+    try:
+        got = ado_request("GET", f"{api}/wit/workitemtypes/{urllib.parse.quote(type_name)}/states?api-version=7.1", pat)
+    except urllib.error.HTTPError:
+        return []
+    return workflow_order([{"name": x["name"], "category": x.get("category", "")} for x in got.get("value", [])])
+
+
+def state_category(states: list[dict], name: str) -> str | None:
+    return next((s["category"] for s in states if s["name"].lower() == name.lower()), None)
+
+
+def sprint_review(root: Path, sid: str, sprint: str | None = None, today: str | None = None) -> dict:
+    """What a sprint (by default the one before today's) left unfinished in the scope's tracker: its PBIs and bugs
+    not done or removed, each with its tasks, plus the states they can take and the sprint to move them to."""
+    today = today or dt.date.today().isoformat()
+    group = sprint_tracker_of(root, sid)
+    status = tracker_sprint_status(root, group, today)
+    if not status["reachable"]:
+        sys.exit(f"kb: {status['note']}")
+    if status["state"] == "off":
+        sys.exit("kb: sprints are off for this scope; turn them on with `kb work sprint use on`")
+    picked = ({"name": sprint.split("\\")[-1], "path": sprint, "start": "", "finish": ""} if sprint
+              else status["previous"])
+    out = {"key": group["key"], "kind": group["kind"], "scopes": group["scopes"], "state": status["state"],
+           "sprint": picked, "target": status["current"] or status["next"], "items": [], "states": {}, "backlog": ""}
+    if not picked:
+        return out
+    t = group["tracker"]
+    if group["kind"] == "local":
+        data = load_work(root, group["scopes"][0])
+        out["states"] = {"pbi": SCRUM_STATES, "bug": SCRUM_STATES, "task": LOCAL_TASK_STATES}
+        out["items"] = [i for i in local_backlog(data, sid, sprint=picked["path"], today=today) if i["stage"] != "done"]
+        out["backlog"] = "no sprint"
+        return out
+    pat = ado_pat()
+    api = f"https://dev.azure.com/{t['organization']}/{urllib.parse.quote(t['project'])}/_apis"
+    out["states"] = {kind: ado_states(api, pat, name) for kind, name in
+                     (("pbi", "Product Backlog Item"), ("bug", "Bug"), ("task", "Task"))}
+    ours = set(group["scopes"])
+    items = [i for i in tracker_backlog(root, sprint=picked["path"])["items"] if ours & set(i.get("scopes") or [])]
+
+    def unfinished(i: dict) -> bool:
+        category = state_category(out["states"].get(i["type"]) or [], i["state"])
+        return category not in ("Completed", "Removed") if category else i["stage"] != "done"
+    out["items"] = [i for i in items if unfinished(i)]
+    out["backlog"] = ado_backlog_iteration(t)
+    return out
+
+
+def work_id(raw) -> int | None:
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and float(raw).is_integer():
+        return int(raw)
+    s = str(raw).strip().lstrip("#")
+    return int(s) if s.isdigit() else None
+
+
+def check_decision(d) -> dict:
+    if not isinstance(d, dict) or work_id(d.get("id")) is None:
+        raise WorkError(f"a decision needs an id: {d!r}")
+    what = d.get("do")
+    if what not in SPRINT_DECISIONS:
+        raise WorkError(f"#{d['id']}: `do` must be one of {', '.join(SPRINT_DECISIONS)}")
+    if what == "state" and not str(d.get("state") or "").strip():
+        raise WorkError(f"#{d['id']}: which state?")
+    if what == "move" and not str(d.get("sprint") or "").strip():
+        raise WorkError(f"#{d['id']}: which sprint?")
+    tasks = [work_id(x) for x in d.get("tasks") or []]
+    if None in tasks:
+        raise WorkError(f"#{d['id']}: a task id isn't a number")
+    return {**d, "id": work_id(d["id"]), "tasks": tasks}
+
+
+def decision_text(d: dict, backlog: str) -> str:
+    if d["do"] == "state":
+        return f"set to {d['state']}" + (f", {len(d['tasks'])} task(s) to {d['task_state']}" if d["tasks"] and d.get("task_state") else "")
+    where = d["sprint"].split("\\")[-1] if d["do"] == "move" else backlog
+    return f"moved to {where}" + (f" with {len(d['tasks'])} task(s)" if d["tasks"] else "")
+
+
+def ado_patch_item(t: dict, pat: str, iid: int, fields: dict) -> None:
+    ado_request("PATCH", f"https://dev.azure.com/{t['organization']}/{urllib.parse.quote(t['project'])}/_apis/wit/"
+                f"workitems/{iid}?api-version=7.1", pat,
+                [{"op": "add", "path": f"/fields/{k}", "value": v} for k, v in fields.items()],
+                content_type="application/json-patch+json")
+
+
+def apply_sprint_decisions(root: Path, sid: str, decisions: list[dict]) -> list[dict]:
+    """Carries out each decision on its own, so one failing leaves the rest done; every one gets a result line.
+    A move or a trip to the backlog takes the item's listed tasks along; a new state sets them to `task_state`."""
+    group = sprint_tracker_of(root, sid)
+    kind, t = group["kind"], group["tracker"]
+    if kind not in ("local", "azure-devops"):
+        sys.exit(f"kb: {sid} tracks work in {connector_name(kind)}; change it with Claude's {connector_name(kind)} connector")
+    results = []
+    if kind == "local":
+        data = load_work(root, group["scopes"][0])
+        for d in decisions:
+            try:
+                d = check_decision(d)
+                if d["do"] == "state":
+                    update_work_item(data, d["id"], {"state": d["state"]})
+                    for tid in d["tasks"] if d.get("task_state") else []:
+                        update_work_item(data, tid, {"state": d["task_state"]})
+                else:
+                    sprint = d["sprint"] if d["do"] == "move" else "none"
+                    for iid in [d["id"], *d["tasks"]]:
+                        update_work_item(data, iid, {"sprint": sprint})
+                results.append({"id": d["id"], "ok": True, "message": f"#{d['id']} {decision_text(d, 'no sprint')}"})
+            except WorkError as e:
+                results.append({"id": d.get("id") if isinstance(d, dict) else None, "ok": False, "message": str(e)})
+        save_work(root, group["scopes"][0], data)
+        return results
+    pat = ado_pat()
+    backlog = ado_backlog_iteration(t)
+    for d in decisions:
+        try:
+            d = check_decision(d)
+        except WorkError as e:
+            results.append({"id": d.get("id") if isinstance(d, dict) else None, "ok": False, "message": str(e)})
+            continue
+        if d["do"] == "state":
+            fields, task_fields = {"System.State": d["state"]}, ({"System.State": d["task_state"]} if d.get("task_state") else None)
+        else:
+            path = d["sprint"] if d["do"] == "move" else backlog
+            fields = task_fields = {"System.IterationPath": path}
+        try:
+            ado_patch_item(t, pat, d["id"], fields)
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            why = ado_error_detail(e, 300) if isinstance(e, urllib.error.HTTPError) else str(e.reason)
+            results.append({"id": d["id"], "ok": False, "message": f"#{d['id']}: {why}"})
+            continue
+        failed = []
+        for tid in d["tasks"] if task_fields else []:
+            try:
+                ado_patch_item(t, pat, tid, task_fields)
+            except (urllib.error.HTTPError, urllib.error.URLError) as e:
+                failed.append(f"task #{tid}: " + (ado_error_detail(e, 200) if isinstance(e, urllib.error.HTTPError) else str(e.reason)))
+        message = f"#{d['id']} {decision_text(d, backlog.split(chr(92))[-1])}"
+        results.append({"id": d["id"], "ok": not failed, "message": message + ("; " + "; ".join(failed) if failed else "")})
+    return results
+
+
+def next_sprint_proposal(sprints: list[dict], today: str) -> dict:
+    """The sprint after the last one: the same length, starting the day after it ends (today when that is past),
+    named with its number one up ("Sprint 42" → "Sprint 43")."""
+    dated = sorted((s for s in sprints if s.get("start") and s.get("finish")), key=lambda s: s["finish"])
+    if not dated:
+        start = dt.date.fromisoformat(today)
+        return {"name": "Sprint 1", "start": today, "finish": (start + dt.timedelta(days=13)).isoformat()}
+    last = dated[-1]
+    a, b = dt.date.fromisoformat(last["start"]), dt.date.fromisoformat(last["finish"])
+    start = max(b + dt.timedelta(days=1), dt.date.fromisoformat(today))
+    m = re.match(r"^(.*?)(\d+)(\D*)$", last["name"])
+    name = f"{m.group(1)}{int(m.group(2)) + 1:0{len(m.group(2))}d}{m.group(3)}" if m else f"Sprint {len(dated) + 1}"
+    taken = {s["name"].lower() for s in sprints}
+    n = 2
+    while name.lower() in taken:
+        name = f"{last['name']} ({n})"
+        n += 1
+    return {"name": name, "start": start.isoformat(), "finish": (start + (b - a)).isoformat()}
+
+
+def cmd_sprint(a) -> int:
+    root = kb_root()
+    today = a.today or dt.date.today().isoformat()
+    if a.action == "status":
+        data = sprint_status(root, a.scope, today)
+        if a.json:
+            print(json.dumps(data, indent=2, ensure_ascii=False))
+            return 0
+        for t in data["trackers"]:
+            parts = [t["kind"], ",".join(t["scopes"]), t["state"]]
+            for k in ("previous", "current", "next"):
+                if t[k]:
+                    parts.append(f"{k} {t[k]['name']} ({t[k]['start']}..{t[k]['finish']})")
+            if t["note"]:
+                parts.append(f"note: {t['note']}")
+            print("\t".join(parts))
+        return 0
+    sid = a.scope or current_project_id(root)
+    if sid not in scope_map(root):
+        sys.exit(f"kb: unknown scope {sid}")
+    if a.action == "review":
+        try:
+            data = sprint_review(root, sid, a.sprint, today)
+        except urllib.error.HTTPError as e:
+            sys.exit(f"kb: Azure DevOps said {e.code}: {ado_error_detail(e, 300)}")
+        except WorkError as e:
+            sys.exit(f"kb: {e}")
+        if a.json:
+            print(json.dumps(data, indent=2, ensure_ascii=False))
+            return 0
+        if not data["sprint"]:
+            print("no sprint has finished yet")
+            return 0
+        print(f"{data['sprint']['name']}: {len(data['items'])} unfinished" +
+              (f"; the next sprint is {data['target']['name']}" if data["target"] else "; no next sprint yet"))
+        for i in data["items"]:
+            tasks = f"{i['tasks_done']}/{i['tasks_total']} tasks" if i["tasks_total"] else ""
+            print(f"#{i['id']}\t{i['type']}\t{i['state']}\t{i['assignee'] or '(unassigned)'}\t{i['title']}\t{tasks}".rstrip())
+        return 0
+    if a.action == "apply":
+        try:
+            decisions = json.loads(sys.stdin.read() or "[]")
+        except ValueError as e:
+            sys.exit(f"kb: the decisions aren't JSON: {e}")
+        if isinstance(decisions, dict):
+            decisions = decisions.get("decisions") or []
+        if not a.yes:
+            for d in decisions:
+                try:
+                    d = check_decision(d)
+                    print(f"would have #{d['id']} {decision_text(d, 'the backlog')}")
+                except WorkError as e:
+                    print(f"invalid: {e}")
+            print("nothing changed; add --yes once the user confirmed")
+            return 0
+        try:
+            results = apply_sprint_decisions(root, sid, decisions)
+        except WorkError as e:
+            sys.exit(f"kb: {e}")
+        if a.json:
+            print(json.dumps({"results": results}, indent=2, ensure_ascii=False))
+            return 0
+        for r in results:
+            print(("" if r["ok"] else "failed: ") + r["message"])
+        return 0 if all(r["ok"] for r in results) else 1
+    group = sprint_tracker_of(root, sid)
+    if group["kind"] == "azure-devops":
+        sys.exit(f"kb: Mindmill doesn't create iterations in Azure DevOps; add the next sprint in {ADO_ITERATIONS_HELP}: "
+                 f"{ado_iterations_url(group['tracker'])}")
+    if group["kind"] != "local":
+        sys.exit(f"kb: {sid} tracks work in {connector_name(group['kind'])}; create the sprint there or with Claude's connector")
+    data = load_work(root, group["scopes"][0])
+    if not data["use_sprints"]:
+        sys.exit("kb: sprints are off for this scope; turn them on with `kb work sprint use on`")
+    plan = next_sprint_proposal(data["sprints"], today)
+    name = " ".join((a.name or plan["name"]).split())
+    start, finish = a.start or plan["start"], a.finish or plan["finish"]
+    for d in (start, finish):
+        try:
+            dt.date.fromisoformat(d)
+        except ValueError:
+            sys.exit(f"kb: {d!r} isn't a date (YYYY-MM-DD)")
+    if finish < start:
+        sys.exit("kb: the sprint finishes before it starts")
+    if not name or name.lower() in ("current", "none") or any(s["name"].lower() == name.lower() for s in data["sprints"]):
+        sys.exit(f"kb: there is already a sprint {name!r}" if name else "kb: the sprint name is empty")
+    data["sprints"].append({"name": name, "start": start, "finish": finish})
+    data["sprints"].sort(key=lambda s: s.get("start", ""))
+    save_work(root, group["scopes"][0], data)
+    if a.json:
+        print(json.dumps({"name": name, "path": name, "start": start, "finish": finish}, ensure_ascii=False))
+    else:
+        print(f"added sprint {name} {start}..{finish}")
+    return 0
 
 
 def html_to_text(html: str) -> str:
@@ -4585,17 +5261,49 @@ def private_refs_left(root: Path, *texts: str) -> list[str]:
 
 def cmd_backlog(a) -> int:
     root = kb_root()
-    e = find_entry(root, a.id)
-    if not e or e.section != "backlog":
-        sys.exit(f"kb: no backlog entry {a.id}")
+    if a.action == "duplicates":
+        return backlog_duplicates_cmd(root, a)
+    if a.action == "link":
+        return backlog_link_cmd(root, a)
+    if a.action == "create":
+        entries = [backlog_entry(root, x) for x in a.ids]
+        return max(backlog_create(root, e, a) for e in entries)
+    e = backlog_entry(root, a.id)
     if a.action == "reject":
         e.set("status", "rejected")
         e.save()
         print(f"rejected {a.id}")
         return 0
+    if a.action == "drop":
+        return backlog_drop(root, e, a)
+    if a.action == "not-duplicate":
+        kept = related_values_of(e.get("not_duplicate_of"))
+        e.set("not_duplicate_of", list(dict.fromkeys(kept + [x.strip().lstrip("#") for x in a.others if x.strip()])))
+        e.save()
+        print(f"{e.id}: not a duplicate of {', '.join(a.others)}")
+        return 0
+    sys.exit(f"kb: unknown backlog action {a.action}")
+
+
+def backlog_entry(root: Path, eid: str) -> Entry:
+    e = find_entry(root, eid)
+    if not e or e.section != "backlog":
+        sys.exit(f"kb: no backlog entry {eid}")
+    return e
+
+
+def prefixed_title(prefix: str, title: str) -> str:
+    """The title with the tracker's prefix, once: a title that already starts with it ("Android: …") keeps its own."""
+    word = prefix.strip()
+    return title if word and title.lower().startswith(word.lower()) else prefix + title
+
+
+def backlog_create(root: Path, e: Entry, a) -> int:
     if e.status != "proposed":
-        sys.exit(f"kb: {a.id} is {e.status}, not proposed")
+        sys.exit(f"kb: {e.id} is {e.status}, not proposed")
     tracker = load_settings(root, e.project).get("tracker") or {}
+    if tracker.get("kind") == "local":
+        return backlog_create_local(root, e, a)
     if why := tracker_elsewhere(root, e.project):
         sys.exit(why)
     if tracker.get("kind") != "azure-devops":
@@ -4606,7 +5314,7 @@ def cmd_backlog(a) -> int:
                  f"(Project Settings → Tracker in the app, or `kb settings set tracker.<key> <value> --project {e.project}`).")
     kind = str(e.get("kind") or "pbi")
     wit = "Bug" if kind == "bug" else "Product Backlog Item"
-    title = (tracker.get("title_prefix") or "") + e.title
+    title = prefixed_title(tracker.get("title_prefix") or "", e.title)
     # The scope's tracker tags, plus only the entry tags the user aligned: KB tags stay in the KB otherwise.
     store = load_item_tags(root)
     entry_tag_list = normalize_tags(e.get("tags") or [])
@@ -4657,17 +5365,25 @@ def cmd_backlog(a) -> int:
             sys.exit("kb: a bug needs found_in; set it on the backlog entry first")
         ops.append({"op": "add", "path": "/fields/Microsoft.VSTS.Build.FoundIn", "value": found_in})
     org, project = tracker["organization"], tracker["project"]
-    parent = e.get("parent") or tracker.get("default_parent")
-    if parent and str(parent) != "none":
+    items_api = f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_apis/wit/workitems"
+    parent, parent_note = backlog_parent(root, e, tracker, getattr(a, "parent", None))
+    if parent:
         ops.append({"op": "add", "path": "/relations/-", "value": {
-            "rel": "System.LinkTypes.Hierarchy-Reverse",
-            "url": f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_apis/wit/workitems/{parent}"}})
+            "rel": "System.LinkTypes.Hierarchy-Reverse", "url": f"{items_api}/{parent}"}})
+    related, pending = backlog_related(root, e)
+    for n in related:
+        ops.append({"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Related", "url": f"{items_api}/{n}"}})
     if not a.yes:
-        print(json.dumps({"type": wit, "sprint": sprint, "operations": ops}, indent=2, ensure_ascii=False))
+        plan = {"type": wit, "sprint": sprint, "operations": ops}
+        if parent_note:
+            plan["parent_from"] = parent_note
+            print(f"kb: parent #{parent} {parent_note}", file=sys.stderr)
+        if pending:
+            plan["related_later"] = pending
+        print(json.dumps(plan, indent=2, ensure_ascii=False))
         print("dry run: pass --yes to create it", file=sys.stderr)
         return 2
-    url = (f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_apis/wit/workitems/"
-           f"${urllib.parse.quote(wit)}?api-version=7.1")
+    url = f"{items_api}/${urllib.parse.quote(wit)}?api-version=7.1"
     try:
         created = ado_request("POST", url, ado_pat(), ops, "application/json-patch+json")
     except Exception as exc:  # urllib raises HTTPError with the server's message in the body
@@ -4679,11 +5395,689 @@ def cmd_backlog(a) -> int:
     e.set("url", web)
     if sprint:
         e.set("sprint", sprint)
-    e.save()
+    finish_created_links(root, e, wid, parent, related, pending)
     if entry_tag_list:
         store["items"][f"azure-devops:{wid}"] = {"tags": entry_tag_list, "aligned": []}
         save_item_tags(root, store)
     print(f"created {wid} {web}")
+    print_link_notes(parent, parent_note, related, pending)
+    return 0
+
+
+def backlog_create_local(root: Path, e: Entry, a) -> int:
+    """Creates the entry in Mindmill's own tracker, with its parent feature and related items."""
+    sid = e.project
+    try:
+        data = load_work(root, sid)
+    except WorkError as exc:
+        sys.exit(f"kb: {exc}")
+    kind = "bug" if str(e.get("kind") or "pbi") == "bug" else "pbi"
+    parent, parent_note = backlog_parent(root, e, {}, getattr(a, "parent", None))
+    if parent is not None and not any(i["id"] == parent and i["type"] == "feature" for i in data["items"]):
+        if not parent_note:
+            sys.exit(f"kb: #{parent} isn't a feature in {sid}'s tracker")
+        print(f"kb: left out parent #{parent} {parent_note}: it isn't a feature in Mindmill's tracker", file=sys.stderr)
+        parent, parent_note = None, ""
+    related, pending = backlog_related(root, e)
+    known = {i["id"] for i in data["items"]}
+    related = [n for n in related if n in known]
+    which = (a.sprint or str(e.get("sprint") or "none")).strip()
+    sprint = None
+    if data["use_sprints"] and which.lower() != "none":
+        if which.lower() == "next":
+            today = dt.date.today().isoformat()
+            sprint = next((s["name"] for s in sorted(data["sprints"], key=lambda s: s["start"]) if s["start"] > today), None)
+        else:
+            sprint = which
+    desc = (body_section(e.body, "Description") or e.body).strip()
+    ac = body_section(e.body, "Acceptance criteria")
+    assignee = str(e.get("assignee") or "")
+    fields = {"description": desc, "acceptance": ac, "tags": normalize_tags(e.get("tags") or []),
+              "assignee": "" if assignee.lower() in ("none", "me") else assignee}
+    if not a.yes:
+        print(json.dumps({"tracker": "local", "type": kind, "title": e.title, "parent": parent, "related": related,
+                          "sprint": sprint, **({"parent_from": parent_note} if parent_note else {}),
+                          **({"related_later": pending} if pending else {})}, indent=2, ensure_ascii=False))
+        print("dry run: pass --yes to create it", file=sys.stderr)
+        return 2
+    try:
+        item = add_work_item(data, kind, e.title, parent=parent, sprint=sprint, **fields)
+    except WorkError as exc:
+        sys.exit(f"kb: {exc}")
+    link_local_related(data, item["id"], related)
+    save_work(root, sid, data)
+    e.set("status", "created")
+    e.set("work_item", str(item["id"]))
+    if item.get("sprint"):
+        e.set("sprint", item["sprint"])
+    finish_created_links(root, e, item["id"], parent, related, pending)
+    print(f"created {item['id']} -")
+    print_link_notes(parent, parent_note, related, pending)
+    return 0
+
+
+def link_local_related(data: dict, iid: int, related: list[int]) -> None:
+    """Related items in Mindmill's own tracker point at each other."""
+    for i in data["items"]:
+        if i["id"] == iid:
+            i["related"] = sorted(set(i.get("related") or []) | {n for n in related if n != iid})
+        elif i["id"] in related:
+            i["related"] = sorted(set(i.get("related") or []) | {iid})
+
+
+def print_link_notes(parent, parent_note: str, related: list[int], pending: list[str]) -> None:
+    if parent:
+        print(f"parent #{parent}" + (f" {parent_note}" if parent_note else ""))
+    if related:
+        print("related to " + ", ".join(f"#{n}" for n in related))
+    if pending:
+        print("related once created: " + ", ".join(pending))
+
+
+def finish_created_links(root: Path, e: Entry, wid: int, parent, related: list[int], pending: list[str]) -> None:
+    """Writes the new links into the entries: this one gets its parent and related work item numbers (entries not
+    created yet stay as ids), entries that named it by id now name its number, and the related ones name it too."""
+    if parent:
+        e.set("parent", str(parent))
+    if related or pending:
+        e.set("related", [str(n) for n in related] + pending)
+    e.save()
+    for x in backlog_entries(root):
+        if x.id == e.id:
+            continue
+        vals = related_values_of(x.get("related"))
+        wi = str(x.get("work_item") or "")
+        if e.id in vals:
+            x.set("related", list(dict.fromkeys(str(wid) if v == e.id else v for v in vals)))
+            x.save()
+        elif wi.isdigit() and int(wi) in related and str(wid) not in vals:
+            x.set("related", vals + [str(wid)])
+            x.save()
+
+
+def backlog_entries(root: Path) -> list[Entry]:
+    return [x for x in all_entries(root) if x.section == "backlog"]
+
+
+def related_values_of(v) -> list[str]:
+    """`related` (or `not_duplicate_of`) as a list of work item numbers and entry ids, without `#`."""
+    return [s for s in (str(x).strip().lstrip("#").strip() for x in as_list(v)) if s and s.lower() != "none"]
+
+
+WORK_ITEM_REF = re.compile(r"_workitems/edit/(\d+)|#\s?(\d{3,})\b|"
+                           r"\b(?:feature|epic|pbi|bug|product backlog item|user story|work item)\s+#?(\d{4,})\b", re.I)
+PARENT_CUE = re.compile(r"\bparent\b|\bunder\s+(?:the\s+)?(?:feature|epic)\b|"
+                        r"\b(?:feature|epic)\b(?=[^\n:]{0,12}:\s*\S*_workitems/edit/\d)", re.I)
+PARENT_NEAR = re.compile(r"_workitems/edit/(\d+)|#\s?(\d+)\b|"
+                         r"\b(?:feature|epic|pbi|product backlog item|user story)\s+#?(\d+)\b|^\s*(?:is\s+|:\s*)?(\d{3,})\b", re.I)
+WEAK_PARENT = re.compile(r"\b(?:feature|epic)\s+#?(\d{4,})\b", re.I)
+TIMESTAMPED_LINE = re.compile(r"^\s*[-*]\s*\d{1,2}:\d{2}\b")
+
+
+def first_group(m: re.Match) -> int:
+    return int(next(g for g in m.groups() if g))
+
+
+def work_item_refs(text: str) -> list[int]:
+    """Work item numbers a text names: Azure DevOps links, #431006, or "Feature 431006"."""
+    return list(dict.fromkeys(first_group(m) for m in WORK_ITEM_REF.finditer(text or "")))
+
+
+def parent_mentions(text: str, strong_only: bool = False) -> list[int]:
+    """Work items a text names as the parent: "Parent: Feature #431006", "under Feature #431006", "Feature here:
+    <link>". Without `strong_only` a plain "Feature 431006" counts too. Timestamped lines (transcript, screen text)
+    are skipped: they quote whatever was on screen."""
+    out: list[int] = []
+    for line in (text or "").splitlines():
+        if TIMESTAMPED_LINE.match(line):
+            continue
+        for m in PARENT_CUE.finditer(line):
+            window = re.split(r"[.;]\s", line[m.end():m.end() + 160], maxsplit=1)[0]
+            near = PARENT_NEAR.search(window)
+            if near:
+                out.append(first_group(near))
+        if not strong_only:
+            out += [int(x) for x in WEAK_PARENT.findall(line)]
+    return list(dict.fromkeys(out))
+
+
+def inferred_parent(root: Path, e: Entry) -> tuple[int | None, str]:
+    """The one parent the entry's text names, else the one its sources clearly name ("under Feature #N")."""
+    own = str(e.get("work_item") or "")
+    found = [n for n in parent_mentions(e.body) if str(n) != own]
+    if len(found) == 1:
+        return found[0], "the entry's text"
+    if found:
+        return None, ""
+    hits: dict[int, str] = {}
+    for sid in as_list(e.get("source")):
+        src = find_entry(root, sid)
+        if src:
+            for n in parent_mentions(src.body, strong_only=True):
+                if str(n) != own:
+                    hits.setdefault(n, src.title)
+    if len(hits) == 1:
+        n, title = next(iter(hits.items()))
+        return n, f"its source “{title}”"
+    return None, ""
+
+
+def backlog_parent(root: Path, e: Entry, tracker: dict, override=None) -> tuple[int | None, str]:
+    """The parent to link: `--parent`, else the entry's `parent`, else the one its text or source clearly names,
+    else `tracker.default_parent` when the entry has no `parent` at all. The note says where an inferred one came from."""
+    if override is not None:
+        v = str(override).strip().lstrip("#")
+        if v.lower() in ("", "none"):
+            return None, ""
+        if not v.isdigit():
+            sys.exit(f"kb: parent {override!r} isn't a work item number")
+        return int(v), ""
+    raw = str(e.get("parent") or "").strip()
+    if raw.lower() != "none" and (m := re.search(r"\d+", raw)):
+        return int(m.group(0)), ""
+    found, where = inferred_parent(root, e)
+    if found:
+        return found, f"(read from {where}; the entry's parent was {raw or 'empty'})"
+    default = str(tracker.get("default_parent") or "").strip().lstrip("#")
+    if not raw and default.isdigit():
+        return int(default), ""
+    return None, ""
+
+
+def backlog_related(root: Path, e: Entry) -> tuple[list[int], list[str]]:
+    """The work items to link as related: numbers in `related`, the work items of related entries already created,
+    and of created entries whose `related` names this one. Related entries not created yet come back as pending."""
+    numbers: list[int] = []
+    pending: list[str] = []
+    own = str(e.get("work_item") or "")
+    for r in related_values_of(e.get("related")):
+        if r.isdigit():
+            n = int(r)
+        else:
+            other = find_entry(root, r)
+            wi = str(other.get("work_item") or "") if other else ""
+            if not wi.isdigit():
+                pending.append(r)
+                continue
+            n = int(wi)
+        if str(n) != own and n not in numbers:
+            numbers.append(n)
+    for x in backlog_entries(root):
+        wi = str(x.get("work_item") or "")
+        if x.id != e.id and wi.isdigit() and wi != own and e.id in related_values_of(x.get("related")) \
+                and int(wi) not in numbers:
+            numbers.append(int(wi))
+    return numbers, pending
+
+
+# ---------------------------------------------------------------- backlog link
+
+
+def backlog_link_cmd(root: Path, a) -> int:
+    """Sets the parent and related links of backlog entries or work items, in the tracker and in the entries.
+    Several targets given together are siblings: each is linked as related to the others."""
+    targets = [link_target(root, t, a.scope) for t in a.targets]
+    extra: list[str] = [x for r in (a.related or []) for x in re.split(r"[,\s]+", r) if x.strip()]
+    lines: list[str] = []
+    done_pairs: set[tuple[int, int]] = set()
+    plans = []
+    for t in targets:
+        e = t["entry"]
+        clear = a.parent is not None and a.parent.strip().lower() == "none"
+        parent, note = backlog_parent(root, e, {}, a.parent) if a.parent is not None or e else (None, "")
+        want: list[str] = list(extra)
+        want += [str(o["number"]) if o["number"] else o["entry"].id for o in targets if o is not t]
+        if e:
+            want += related_values_of(e.get("related"))
+        want = [w for w in dict.fromkeys(w.strip().lstrip("#") for w in want) if w and w != str(t["number"] or "")
+                and (not e or w != e.id)]
+        plans.append((t, parent, note, clear, want))
+    for t, parent, note, clear, want in plans:
+        e = t["entry"]
+        if not t["number"]:
+            lines.append(f"{e.id}: parent {('#' + str(parent)) if parent else 'none'}, related "
+                         f"{', '.join(want) or 'none'} (on the proposal; linked when it is created)")
+            if a.yes:
+                if parent or clear:
+                    e.set("parent", str(parent) if parent else "none")
+                if want:
+                    e.set("related", list(dict.fromkeys(related_values_of(e.get("related")) + want)))
+                e.save()
+            continue
+        numbers = []
+        for w in want:
+            if w.isdigit():
+                numbers.append(int(w))
+                continue
+            other = find_entry(root, w)
+            wi = str(other.get("work_item") or "") if other else ""
+            if not wi.isdigit():
+                sys.exit(f"kb: {w} isn't created yet; create it first, or link it from the proposal's `related`")
+            numbers.append(int(wi))
+        numbers = [n for n in dict.fromkeys(numbers) if n != t["number"]]
+        kind = t["kind"]
+        if kind == "local":
+            lines += link_local(root, t, parent, clear, numbers, a.yes)
+        else:
+            lines += link_ado(root, t, parent, clear, numbers, done_pairs, a.yes)
+        if note and parent:
+            lines.append(f"#{t['number']}: parent #{parent} {note}")
+        if a.yes:
+            remember_links(root, t["number"], t["scope"], parent if parent else ("none" if clear else None), numbers)
+    print("\n".join(lines) if lines else "nothing to link")
+    if not a.yes:
+        print("dry run: pass --yes to change the links", file=sys.stderr)
+        return 2
+    return 0
+
+
+def link_target(root: Path, raw: str, scope: str | None) -> dict:
+    """A backlog entry or a work item number, with its tracker."""
+    v = raw.strip().lstrip("#")
+    entry = None
+    if v.isdigit():
+        number = int(v)
+        entry = next((x for x in backlog_entries(root) if str(x.get("work_item") or "") == v
+                      and (not scope or x.project == scope)), None)
+    else:
+        entry = backlog_entry(root, raw)
+        wi = str(entry.get("work_item") or "")
+        number = int(wi) if wi.isdigit() and entry.status == "created" else None
+    sid = scope or (entry.project if entry else None)
+    tracker = (load_settings(root, sid).get("tracker") or {}) if sid else {}
+    kind = tracker.get("kind") or ("azure-devops" if not sid else "")
+    if number and kind == "jira":
+        sys.exit(f"kb: {sid} tracks work in Jira; link it with Claude's Jira connector")
+    if number and kind not in ("azure-devops", "local"):
+        sys.exit(f"kb: {sid or raw} has no tracker kb can link in")
+    return {"number": number, "entry": entry, "scope": sid, "kind": kind}
+
+
+def link_ado(root: Path, t: dict, parent, clear: bool, numbers: list[int], done_pairs: set, yes: bool) -> list[str]:
+    org, project = ado_tracker_for(root, t["scope"])
+    pat = ado_pat()
+    api = f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_apis/wit/workitems"
+    n = t["number"]
+    try:
+        w = ado_request("GET", f"{api}/{n}?$expand=relations&api-version=7.1", pat)
+    except urllib.error.HTTPError as exc:
+        sys.exit(f"kb: #{n}: Azure DevOps said {exc.code}: {ado_error_detail(exc, 300)}")
+    current, related_now = None, set()
+    for i, r in enumerate(w.get("relations") or []):
+        tail = str(r.get("url", "")).rsplit("/", 1)[-1]
+        if not tail.isdigit():
+            continue
+        if r.get("rel") == "System.LinkTypes.Hierarchy-Reverse":
+            current = (i, int(tail))
+        elif r.get("rel") == "System.LinkTypes.Related":
+            related_now.add(int(tail))
+    ops, lines = [], []
+    if parent and (not current or current[1] != parent):
+        if current:
+            ops.append({"op": "remove", "path": f"/relations/{current[0]}"})
+        ops.append({"op": "add", "path": "/relations/-", "value": {
+            "rel": "System.LinkTypes.Hierarchy-Reverse", "url": f"{api}/{parent}"}})
+        lines.append(f"#{n}: parent #{parent}" + (f" (was #{current[1]})" if current else ""))
+    elif parent:
+        lines.append(f"#{n}: parent #{parent} already")
+    elif clear and current:
+        ops.append({"op": "remove", "path": f"/relations/{current[0]}"})
+        lines.append(f"#{n}: parent #{current[1]} removed")
+    for m in numbers:
+        if m in related_now or (n, m) in done_pairs:
+            lines.append(f"#{n}: related to #{m} already")
+            continue
+        ops.append({"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Related", "url": f"{api}/{m}"}})
+        done_pairs |= {(n, m), (m, n)}
+        lines.append(f"#{n}: related to #{m}")
+    if ops and yes:
+        try:
+            ado_request("PATCH", f"{api}/{n}?api-version=7.1", pat, ops, "application/json-patch+json")
+        except urllib.error.HTTPError as exc:
+            sys.exit(f"kb: #{n}: Azure DevOps said {exc.code}: {ado_error_detail(exc, 300)}")
+    return lines
+
+
+def link_local(root: Path, t: dict, parent, clear: bool, numbers: list[int], yes: bool) -> list[str]:
+    sid, n = t["scope"], t["number"]
+    data = load_work(root, sid)
+    try:
+        item = find_work_item(data, n)
+        new_parent = check_parent(data, item["type"], parent) if parent else None
+    except WorkError as exc:
+        sys.exit(f"kb: {exc}")
+    known = {i["id"] for i in data["items"]}
+    numbers = [m for m in numbers if m in known]
+    lines = []
+    if new_parent and item.get("parent") != new_parent:
+        lines.append(f"#{n}: parent #{new_parent}")
+        item["parent"] = new_parent
+    elif clear and item.get("parent"):
+        lines.append(f"#{n}: parent #{item['parent']} removed")
+        item["parent"] = None
+    lines += [f"#{n}: related to #{m}" for m in numbers if m not in (item.get("related") or [])]
+    link_local_related(data, n, numbers)
+    if yes:
+        save_work(root, sid, data)
+    return lines
+
+
+def remember_links(root: Path, number: int, scope: str | None, parent, related: list[int]) -> None:
+    """Keeps the entries in step with the tracker: the entry of `number` gets its parent and related numbers, and the
+    entries of the related items name `number` back."""
+    for x in backlog_entries(root):
+        wi = str(x.get("work_item") or "")
+        if not wi.isdigit() or (scope and x.project != scope and int(wi) == number):
+            continue
+        vals = related_values_of(x.get("related"))
+        changed = False
+        if int(wi) == number:
+            if parent is not None:
+                x.set("parent", str(parent))
+                changed = True
+            add = [str(m) for m in related if str(m) not in vals]
+            if add:
+                x.set("related", vals + add)
+                changed = True
+        elif int(wi) in related and str(number) not in vals:
+            x.set("related", vals + [str(number)])
+            changed = True
+        if changed:
+            x.save()
+
+
+# ---------------------------------------------------------------- backlog drop
+
+
+def backlog_drop(root: Path, e: Entry, a) -> int:
+    """Drops a proposal that duplicates an existing item: rejected with `duplicate_of`, optionally with its notes as
+    a comment on the existing item. Entries that named it in `related` name the existing item instead."""
+    if e.status != "proposed":
+        sys.exit(f"kb: {e.id} is {e.status}, not proposed")
+    of = a.duplicate_of.strip().lstrip("#")
+    number = int(of) if of.isdigit() else None
+    if not number and not find_entry(root, of):
+        sys.exit(f"kb: no work item number or entry {a.duplicate_of}")
+    plan = [f"{e.id}: rejected as a duplicate of {'#' + of if number else of}"]
+    if a.comment:
+        if not number:
+            sys.exit("kb: --comment needs a work item number")
+        notes = (body_section(e.body, "Description") or e.body).strip()
+        ac = body_section(e.body, "Acceptance criteria")
+        if ac:
+            notes += "\n\n**Acceptance criteria**\n\n" + ac
+        heading = f"Also proposed: {e.title}"
+        plan.append(f"#{number}: comment “{heading}” with the proposal's description")
+    if not a.yes:
+        print("\n".join(plan))
+        print("dry run: pass --yes to drop it", file=sys.stderr)
+        return 2
+    if a.comment:
+        tracker = load_settings(root, e.project).get("tracker") or {}
+        print(tracker_note(root, e.project, number, notes, heading, tracker.get("kind") != "local"))
+    e.set("status", "rejected")
+    e.set("duplicate_of", of)
+    e.save()
+    for x in backlog_entries(root):
+        vals = related_values_of(x.get("related"))
+        if x.id != e.id and e.id in vals:
+            x.set("related", list(dict.fromkeys(of if v == e.id else v for v in vals)))
+            x.save()
+    print(plan[0])
+    return 0
+
+
+# ---------------------------------------------------------------- backlog duplicates
+
+DUP_STOP_WORDS = {
+    "the", "and", "for", "with", "from", "into", "that", "this", "when", "then", "than", "are", "was", "were",
+    "will", "should", "can", "not", "but", "all", "any", "its", "our", "you", "your", "have", "has", "had",
+    "how", "what", "who", "why", "where", "which", "about", "after", "before", "over", "under", "per", "via",
+    "add", "make", "use", "new", "get", "set", "app", "android", "ios",
+    "og", "der", "det", "den", "som", "til", "med", "fra", "ikke", "skal", "kan", "vil", "har", "eller",
+    "pbi", "bug", "task",
+    "show", "fix", "update", "remove", "support", "handle", "allow", "change", "display", "implement", "create",
+    "enable", "user",
+}
+DUP_LIKELY = 0.75
+DUP_POSSIBLE = 0.45
+
+
+def dup_words(s: str) -> set[str]:
+    """Lowercased words of three or more letters, without common words, generic verbs and a plural `s`
+    (as BacklogDuplicates in the app)."""
+    out = set()
+    for p in re.split(r"[\W_]+", (s or "").lower()):
+        if len(p) < 3 or p in DUP_STOP_WORDS or p.isdigit():
+            continue
+        if len(p) > 4 and p.endswith("s") and not p.endswith("ss"):
+            p = p[:-1]
+        if p not in DUP_STOP_WORDS:
+            out.add(p)
+    return out
+
+
+def bare_title(title: str, prefix: str = "") -> str:
+    """The title without the tracker's prefix and a short platform lead ("iOS: ", "Android: ")."""
+    t = (title or "").strip()
+    if prefix and t.startswith(prefix):
+        t = t[len(prefix):]
+    return re.sub(r"^[^:]{1,20}:\s+", "", t).strip()
+
+
+def dice(a: set, b: set) -> float:
+    return 2 * len(a & b) / (len(a) + len(b)) if a and b else 0.0
+
+
+def duplicate_score(p: dict, c: dict) -> tuple[float, str, list[str]]:
+    """How likely candidate `c` is the same work as proposal `p`, 0…1, its verdict and why. Title words count most;
+    the description counts when both have one; the same parent and the proposal naming the item add to it. One shared
+    title word is never enough on its own."""
+    tp, tc = bare_title(p["title"]), bare_title(c["title"])
+    wp, wc = dup_words(tp), dup_words(tc)
+    t = 1.0 if tp and tp.lower() == tc.lower() else dice(wp, wc)
+    reasons = []
+    shared = sorted(wp & wc)
+    if shared:
+        reasons.append("title words: " + ", ".join(shared))
+    score = t
+    if p.get("text") and c.get("text"):
+        ctx = dice(wp | dup_words(p["text"]), wc | dup_words(c["text"]))
+        score = 0.7 * t + 0.3 * ctx
+    if p.get("parent") and p.get("parent") == c.get("parent"):
+        score += 0.1
+        reasons.append(f"same parent #{p['parent']}")
+    mentioned = bool(c.get("number")) and c["number"] in (p.get("refs") or [])
+    if mentioned:
+        score += 0.15
+        reasons.append(f"the proposal mentions #{c['number']}")
+    score = round(min(score, 1.0), 2)
+    if len(shared) < 2 and t < 1 and not (shared and p.get("parent") and p.get("parent") == c.get("parent")):
+        score = min(score, DUP_POSSIBLE - 0.01)
+    verdict = "likely" if score >= DUP_LIKELY else "possible" if score >= DUP_POSSIBLE or mentioned else "none"
+    return score, verdict, reasons
+
+
+def duplicate_proposal(root: Path, e: Entry) -> dict:
+    parent, _ = backlog_parent(root, e, {})
+    related = related_values_of(e.get("related"))
+    refs = [n for n in work_item_refs(e.body + "\n" + e.summary) if n != parent and str(n) not in related]
+    return {"id": e.id, "scope": e.project, "title": e.title, "text": " ".join([e.summary, e.body])[:2000],
+            "parent": parent, "refs": refs, "related": related,
+            "dismissed": related_values_of(e.get("not_duplicate_of"))}
+
+
+def same_scope_family(scope: str, others: list[str], info: dict[str, tuple[str, bool]]) -> bool:
+    """Whether items of `others` can duplicate work in `scope`: the same scope, or the project-wide scope of the same
+    project on either side. Another platform's scope (its twin) can't."""
+    if scope in others:
+        return True
+    project, wide = info.get(scope, (scope, False))
+    same_project = bool(others) and all(info.get(s, (s, False))[0] == project for s in others)
+    return same_project and (wide or all(info.get(s, (s, False))[1] for s in others))
+
+
+def duplicates_for(p: dict, candidates: list[dict], info: dict[str, tuple[str, bool]], limit: int = 3) -> dict:
+    """The proposal's best matches among the candidates of its scope. Its parent, its related items and those the
+    user said aren't duplicates are left out; items of another scope (the other platform's twin) too."""
+    skip = set(p["related"]) | set(p["dismissed"]) | ({str(p["parent"])} if p.get("parent") else set()) | {p["id"]}
+    matches = []
+    for c in candidates:
+        key = str(c.get("number") or c.get("id"))
+        if key in skip or str(c.get("id")) in skip:
+            continue
+        if not same_scope_family(p["scope"], c.get("scopes") or [], info):
+            continue
+        score, verdict, reasons = duplicate_score(p, c)
+        if verdict != "none":
+            matches.append({**{k: c.get(k) for k in ("kind", "id", "number", "title", "state", "type", "url")},
+                            "score": score, "verdict": verdict, "reasons": reasons})
+    matches.sort(key=lambda m: (-m["score"], str(m["id"])))
+    matches = matches[:limit]
+    return {"id": p["id"], "scope": p["scope"], "title": p["title"],
+            "verdict": matches[0]["verdict"] if matches else "none", "matches": matches}
+
+
+def ado_duplicate_candidates(root: Path, org: str, project: str, owners: list[tuple[dict, dict]], wide: str,
+                             proposals: list[dict], pat: str) -> list[dict]:
+    """PBIs and bugs that could already cover the proposals: those open or done or created in the last 60 days in
+    the trackers' areas, those whose title has a proposal's two most telling words, and the children of the
+    proposals' parents."""
+    api = f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_apis"
+    areas = sorted({t["area_path"] for _, t in owners if t.get("area_path")})
+    where_area = (" AND (" + " OR ".join(f"[System.AreaPath] UNDER '{wiql_text(x)}'" for x in areas) + ")") if areas else ""
+    base = ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project"
+            f"{where_area} AND [System.WorkItemType] IN ('Product Backlog Item', 'Bug') AND [System.State] <> 'Removed' AND ")
+    since = (dt.date.today() - dt.timedelta(days=60)).isoformat()
+    queries = [(base + f"([System.State] NOT IN ('Done', 'Closed') OR [System.ChangedDate] >= '{since}' "
+                f"OR [System.CreatedDate] >= '{since}') ORDER BY [System.ChangedDate] DESC", 400)]
+    for p in proposals:
+        words = sorted(dup_words(bare_title(p["title"])), key=lambda w: (-len(w), w))[:2]
+        if words:
+            queries.append((base + " AND ".join(f"[System.Title] CONTAINS '{wiql_text(w)}'" for w in words)
+                            + " ORDER BY [System.ChangedDate] DESC", 20))
+    ids: list[int] = []
+    for q, top in queries:
+        got = ado_request("POST", f"{api}/wit/wiql?api-version=7.1&$top={top}", pat, {"query": q}).get("workItems", [])
+        ids += [w["id"] for w in got[:top]]
+    for parent in sorted({p["parent"] for p in proposals if p.get("parent")}):
+        try:
+            w = ado_request("GET", f"{api}/wit/workitems/{parent}?$expand=relations&api-version=7.1", pat)
+        except urllib.error.HTTPError:
+            continue
+        ids += [int(r["url"].rsplit("/", 1)[-1]) for r in w.get("relations") or []
+                if r.get("rel") == "System.LinkTypes.Hierarchy-Forward" and r.get("url", "").rsplit("/", 1)[-1].isdigit()]
+    ids = list(dict.fromkeys(ids))
+    out = []
+    fields = ("System.Title,System.State,System.WorkItemType,System.Tags,System.Parent,System.ChangedDate,"
+              "System.CreatedDate,System.Description")
+    for chunk in range(0, len(ids), 200):
+        batch = ids[chunk:chunk + 200]
+        for w in ado_request("GET", f"{api}/wit/workitems?ids={','.join(map(str, batch))}&fields={fields}"
+                                    "&api-version=7.1", pat).get("value", []):
+            f = w.get("fields") or {}
+            if f.get("System.WorkItemType") not in ("Product Backlog Item", "Bug") or f.get("System.State") == "Removed":
+                continue
+            title = f.get("System.Title", "")
+            tags = [x.strip() for x in (f.get("System.Tags") or "").split(";") if x.strip()]
+            scopes = scopes_of_item(title, tags, owners, wide)
+            prefix = next((t.get("title_prefix") or "" for sc, t in owners if sc["id"] == scopes[0]), "")
+            out.append({"kind": "work_item", "id": str(w["id"]), "number": w["id"],
+                        "type": "bug" if f.get("System.WorkItemType") == "Bug" else "pbi",
+                        "title": title[len(prefix):] if prefix and title.startswith(prefix) else title,
+                        "state": f.get("System.State", ""), "scopes": scopes, "parent": f.get("System.Parent"),
+                        "changed": f.get("System.ChangedDate", ""), "created": f.get("System.CreatedDate", ""),
+                        "text": html_to_text(f.get("System.Description") or "")[:1500],
+                        "url": f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_workitems/edit/{w['id']}"})
+    return out
+
+
+def local_duplicate_candidates(data: dict, sid: str) -> list[dict]:
+    return [{"kind": "work_item", "id": str(i["id"]), "number": i["id"], "type": i["type"], "title": i["title"],
+             "state": i["state"], "scopes": [sid], "parent": i.get("parent"), "text": i.get("description") or "",
+             "url": ""}
+            for i in data["items"] if i["type"] in ("pbi", "bug") and i["state"] != "Removed"]
+
+
+def backlog_duplicates(root: Path, scope: str | None = None, only: list[str] | None = None,
+                       offline: bool = False) -> dict:
+    """Checks every proposal waiting to be created against the tracker's items, the KB's created entries and the
+    other proposals of its scope."""
+    entries = backlog_entries(root)
+    proposals_e = [x for x in entries if x.status == "proposed" and not is_draft(x)
+                   and (not scope or x.project == scope or scope in as_list(x.get("scopes")))
+                   and (not only or x.id in only)]
+    proposals = [duplicate_proposal(root, x) for x in proposals_e]
+    registry = load_registry(root)
+    info = {sc["id"]: (sc["project"], bool(sc.get("wide"))) for sc in registry}
+    notes: list[str] = []
+    tracker_candidates: list[dict] = []
+    by_tracker: dict[tuple[str, str], list[dict]] = {}
+    local_scopes = set()
+    for p in proposals:
+        t = load_settings(root, p["scope"]).get("tracker") or {}
+        if t.get("kind") == "azure-devops" and t.get("organization") and t.get("project"):
+            by_tracker.setdefault((t["organization"], t["project"]), []).append(p)
+        elif t.get("kind") == "local":
+            local_scopes.add(p["scope"])
+        elif t.get("kind") == "jira":
+            notes.append(f"{p['scope']}: Jira issues are checked through Claude's Jira connector, not here")
+    if not offline and by_tracker:
+        owners_by = ado_trackers(root)
+        wide_of = {sc["project"]: sc["id"] for sc in registry if sc.get("wide")}
+        try:
+            pat = ado_pat()
+        except SystemExit as exc:
+            pat = ""
+            notes.append(str(exc.code))
+        for (org, proj), ps in by_tracker.items():
+            if not pat:
+                break
+            owners = owners_by.get((org, proj)) or []
+            w = wide_of.get(owners[0][0]["project"], owners[0][0]["id"]) if owners else ps[0]["scope"]
+            try:
+                tracker_candidates += ado_duplicate_candidates(root, org, proj, owners, w, ps, pat)
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                notes.append(f"{org}/{proj}: {ado_error_detail(exc, 200)}")
+    for sid in sorted(local_scopes):
+        data = load_work_or_warn(root, sid)
+        if data is not None:
+            tracker_candidates += local_duplicate_candidates(data, sid)
+    in_tracker = {str(c["number"]) for c in tracker_candidates}
+    kb_candidates = []
+    for x in entries:
+        wi = str(x.get("work_item") or "")
+        if x.status == "created" and wi and wi not in in_tracker:
+            kb_candidates.append({"kind": "entry", "id": x.id, "number": int(wi) if wi.isdigit() else None,
+                                  "type": str(x.get("kind") or "pbi"), "title": x.title, "state": "created",
+                                  "scopes": [x.project], "parent": backlog_parent(root, x, {})[0],
+                                  "text": " ".join([x.summary, x.body])[:1500], "url": str(x.get("url") or "")})
+    for x in entries:
+        if x.status == "proposed" and not is_draft(x):
+            kb_candidates.append({"kind": "proposal", "id": x.id, "number": None, "type": str(x.get("kind") or "pbi"),
+                                  "title": x.title, "state": "proposed", "scopes": [x.project],
+                                  "parent": backlog_parent(root, x, {})[0],
+                                  "text": " ".join([x.summary, x.body])[:1500], "url": ""})
+    candidates = tracker_candidates + kb_candidates
+    return {"checked": iso_now(), "proposals": [duplicates_for(p, candidates, info) for p in proposals],
+            "candidates": tracker_candidates, "notes": notes}
+
+
+def backlog_duplicates_cmd(root: Path, a) -> int:
+    report = backlog_duplicates(root, a.scope, a.entry or None, a.offline)
+    if a.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+    for p in report["proposals"]:
+        if p["verdict"] == "none":
+            print(f"{p['id']}: no match")
+            continue
+        for m in p["matches"]:
+            label = f"#{m['number']}" if m.get("number") else m["id"]
+            print(f"{p['id']}: {m['verdict']} duplicate of {label} {m['title']} ({m['state']}, {m['score']:.2f}; "
+                  f"{'; '.join(m['reasons'])})")
+    for n in report["notes"]:
+        print(f"kb: {n}", file=sys.stderr)
     return 0
 
 
@@ -4865,10 +6259,7 @@ def test_source(s: dict, query: str) -> int:
         print(f"{hits} matching files" + (" (stopped at 10)" if hits >= 10 else ""), file=sys.stderr)
         return 0 if hits else 1
     if kind == "command":
-        import shlex
-        cmd = str(cfg.get("run", "")).replace("{query}", shlex.quote(query))
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60,
-                           cwd=os.path.expanduser(cfg["cwd"]) if cfg.get("cwd") else None)
+        r = run_shell(str(cfg.get("run", "")), query, os.path.expanduser(cfg["cwd"]) if cfg.get("cwd") else None, 60)
         print(r.stdout[:4000])
         if r.stderr:
             print(r.stderr[:1000], file=sys.stderr)
@@ -5194,7 +6585,7 @@ def scan_docs(checkout: Path) -> list[str]:
     if r.returncode == 0:
         files = r.stdout.splitlines()
     else:
-        files = [str(p.relative_to(checkout)) for p in checkout.rglob("*") if p.is_file()]
+        files = [p.relative_to(checkout).as_posix() for p in checkout.rglob("*") if p.is_file()]
     out = []
     for f in files:
         parts = Path(f).parts
@@ -5371,7 +6762,10 @@ def people_cache_path() -> Path:
     """The directory of colleagues fetched from Azure DevOps: a cache on this machine, outside the KB."""
     if os.environ.get("KB_PEOPLE_CACHE"):
         return Path(os.environ["KB_PEOPLE_CACHE"])
-    base = Path("~/Library/Caches/KB") if sys.platform == "darwin" else Path("~/.cache/kb")
+    if WINDOWS:
+        base = Path(os.environ.get("LOCALAPPDATA") or Path("~/AppData/Local").expanduser()) / "Mindmill" / "cache"
+    else:
+        base = Path("~/Library/Caches/KB") if sys.platform == "darwin" else Path("~/.cache/kb")
     return base.expanduser() / "people-directory.json"
 
 
@@ -5704,9 +7098,8 @@ def cmd_calendar(a) -> int:
     start = a.date_from or (data.get("from") if isinstance(data, dict) else None) or dt.date.today().isoformat()
     end = a.date_to or (data.get("to") if isinstance(data, dict) else None) or start
     today = dt.date.today().isoformat()
-    import fcntl
     lock = open(root / ".calendar.lock", "w")
-    fcntl.flock(lock, fcntl.LOCK_EX)
+    lock_exclusive(lock)
     cal = calendar_settings(root)
     ignore = [str(w).lower() for w in cal["ignore"] if str(w).strip()]
     meetings = [e for e in all_entries(root) if e.section == "meetings"]
@@ -5853,11 +7246,39 @@ def cmd_lint(a) -> int:
         for src in sources if isinstance(sources, list) else [sources]:
             if src and "://" not in src and not src.startswith(("ado:", "session:", "daily:")) and src not in ids:
                 problems.append(f"{e.id}: source unknown {src}")
+    problems += name_problems(root)
+    for team in team_folders_without_gitattributes(root):
+        print(f"note: {team} has no .gitattributes; add one with `{TEAM_GITATTRIBUTES.strip()}` so Windows "
+              "checkouts don't write CRLF into shared entries", file=sys.stderr)
     for p in problems:
         print(p)
     if not problems:
         print("ok")
     return 1 if problems else 0
+
+
+def name_problems(root: Path) -> list[str]:
+    """Every folder the KB reads, checked for names that would break a Windows checkout or copy."""
+    if not is_split(root):
+        return portability_problems(root, ".")
+    out = portability_problems(home(root), "shared")
+    for sid in scope_map(root):
+        out += portability_problems(private_dir(root, sid), sid)
+        team = team_dir(root, sid)
+        if team:
+            out += portability_problems(team, f"{sid} (team)")
+    return out
+
+
+def team_folders_without_gitattributes(root: Path) -> list[str]:
+    if not is_split(root):
+        return []
+    seen = []
+    for sid in scope_map(root):
+        team = team_dir(root, sid)
+        if team and team.is_dir() and not (team / ".gitattributes").exists() and str(team) not in seen:
+            seen.append(str(team))
+    return seen
 
 
 def split_ids(raw: str | None) -> list[str]:
@@ -6478,13 +7899,34 @@ def main(argv: list[str]) -> int:
     sgn.add_argument("--body-stdin", action="store_true")
     sgn.add_argument("--force", action="store_true")
 
-    bl = sub.add_parser("backlog", help="create or reject a proposed PBI or bug")
+    bl = sub.add_parser("backlog", help="create, link, check or reject proposed PBIs and bugs")
     bls = bl.add_subparsers(dest="action", required=True)
-    blc = bls.add_parser("create")
-    blc.add_argument("id")
+    blc = bls.add_parser("create", help="create proposals in the tracker, with their parent and related links")
+    blc.add_argument("ids", nargs="+", metavar="id")
     blc.add_argument("--sprint", choices=["current", "next", "none"])
+    blc.add_argument("--parent", help="the parent's work item number, or none; overrides the entry and its text")
     blc.add_argument("--yes", action="store_true", help="without it, only print what would be posted")
     bls.add_parser("reject").add_argument("id")
+    bll = bls.add_parser("link", help="set the parent and related links of backlog entries or work items; several "
+                                      "given together are linked as related to each other")
+    bll.add_argument("targets", nargs="+", metavar="entry-or-number")
+    bll.add_argument("--parent", help="the parent's work item number, or none to remove it")
+    bll.add_argument("--related", action="append", help="a work item number or backlog entry id; repeat or comma-separate")
+    bll.add_argument("--scope", help="the scope whose tracker holds bare work item numbers")
+    bll.add_argument("--yes", action="store_true", help="without it, only print what would change")
+    bld = bls.add_parser("duplicates", help="check proposals waiting to be created against the tracker and each other")
+    bld.add_argument("--scope")
+    bld.add_argument("--entry", action="append", help="only this proposal; repeatable")
+    bld.add_argument("--offline", action="store_true", help="only the knowledge base and local trackers")
+    bld.add_argument("--json", action="store_true")
+    bldr = bls.add_parser("drop", help="drop a proposal that duplicates an existing item")
+    bldr.add_argument("id")
+    bldr.add_argument("--duplicate-of", required=True, help="the work item number or backlog entry it duplicates")
+    bldr.add_argument("--comment", action="store_true", help="add the proposal's notes as a comment on that item")
+    bldr.add_argument("--yes", action="store_true", help="without it, only print what would change")
+    bln = bls.add_parser("not-duplicate", help="note that a proposal isn't a duplicate of these items")
+    bln.add_argument("id")
+    bln.add_argument("others", nargs="+", metavar="number-or-entry")
 
     tr = sub.add_parser("tracker", help="read the project's work-item tracker: sprints, areas, features, people")
     trs = tr.add_subparsers(dest="action", required=True)
@@ -6503,10 +7945,15 @@ def main(argv: list[str]) -> int:
     for name in ("features", "items"):
         trf = trs.add_parser(name)
         trf.add_argument("--project", "--scope", dest="project")
-        trf.add_argument("--search")
+        trf.add_argument("--search", help="words the title has, each anywhere in it")
         trf.add_argument("--type", help="comma-separated work item types")
         trf.add_argument("--area", help="defaults to tracker.area_path")
         trf.add_argument("--limit", type=int, default=15)
+    trfi = trs.add_parser("find", help="work items whose id is the query or whose title has its words, e.g. to pick a parent")
+    trfi.add_argument("query")
+    trfi.add_argument("--project", "--scope", dest="project")
+    trfi.add_argument("--limit", type=int, default=10)
+    trfi.add_argument("--json", action="store_true")
     tri = trs.add_parser("item")
     tri.add_argument("id")
     tri.add_argument("--project", "--scope", dest="project")
@@ -6529,17 +7976,49 @@ def main(argv: list[str]) -> int:
     trsa = trs.add_parser("start", help="move a PBI or bug nobody has started to the tracker's in-progress state")
     trsa.add_argument("id")
     trsa.add_argument("--project", "--scope", dest="project")
+    trrs = trs.add_parser("resolve", help="move a PBI or bug whose work is finished to its Resolved state (or Done/Closed); only after the user said so")
+    trrs.add_argument("id")
+    trrs.add_argument("--project", "--scope", dest="project")
+    trrs.add_argument("--yes", action="store_true")
     tras = trs.add_parser("assign", help="assign PBIs, bugs or tasks to someone (me for yourself)")
     tras.add_argument("ids", nargs="+")
     tras.add_argument("--to", required=True, help="me, a name from the people directory, or an email")
-    trmv = trs.add_parser("move", help="move PBIs or bugs to a sprint")
+    trmv = trs.add_parser("move", help="move PBIs or bugs to a sprint, or out of every sprint to the backlog")
     trmv.add_argument("ids", nargs="+")
-    trmv.add_argument("--sprint", required=True, help="an iteration path, or current or next")
+    where = trmv.add_mutually_exclusive_group(required=True)
+    where.add_argument("--sprint", help="an iteration path, or current or next")
+    where.add_argument("--backlog", action="store_true",
+                       help="no sprint: tracker.backlog_iteration, else the iteration root, else the project")
     trmv.add_argument("--project", "--scope", dest="project", help="whose sprints current and next mean")
     tru = trs.add_parser("people", help="people assigned to the area's work items in the last 90 days")
     tru.add_argument("search", nargs="?", default="")
     tru.add_argument("--area")
     tru.add_argument("--project", "--scope", dest="project")
+
+    spr = sub.add_parser("sprint", help="sprints in every tracker: where each stands, the last sprint's leftovers, "
+                                        "decisions on them, the next sprint")
+    sprs = spr.add_subparsers(dest="action", required=True)
+
+    def sprint_cmd(name, **kw):
+        p = sprs.add_parser(name, **kw)
+        p.add_argument("--scope", "--project", dest="scope")
+        p.add_argument("--today", help=argparse.SUPPRESS)
+        return p
+
+    sprint_cmd("status", help="each tracker's previous, current and next sprint; --scope for one").add_argument("--json", action="store_true")
+    sprv = sprint_cmd("review", help="what the previous sprint left unfinished, with tasks, states and the sprint to move to")
+    sprv.add_argument("--sprint", help="another sprint's iteration path or name")
+    sprv.add_argument("--json", action="store_true")
+    spra = sprint_cmd("apply", help="decisions on unfinished items, JSON on stdin: "
+                                    '[{"id": 5, "do": "state|move|backlog", "state": "Done", "sprint": "<path>", '
+                                    '"tasks": [ids], "task_state": "Done"}]')
+    spra.add_argument("--yes", action="store_true", help="without it, only print what would change")
+    spra.add_argument("--json", action="store_true")
+    sprc = sprint_cmd("create", help="add the next sprint (Mindmill's own tracker); defaults follow the last sprint")
+    sprc.add_argument("--name")
+    sprc.add_argument("--start", help="YYYY-MM-DD")
+    sprc.add_argument("--finish", help="YYYY-MM-DD")
+    sprc.add_argument("--json", action="store_true")
 
     wk = sub.add_parser("work", help="Mindmill's built-in work tracker: features, PBIs, bugs and tasks in the scope's work.json")
     wks = wk.add_subparsers(dest="action", required=True)
@@ -6727,6 +8206,8 @@ def main(argv: list[str]) -> int:
                      help="decision id, work item URL or words; repeat (or comma-separate) for several")
     fuc.add_argument("--answer")
     fuc.add_argument("--auto", action="store_true", help="the app closed it by itself (closed_by: kb)")
+    fub = fus.add_parser("to-backlog", help="turn a \"create a PBI\" follow-up into a suggested backlog item and close it")
+    fub.add_argument("id")
     fum = fus.add_parser("merge", help="fold duplicate follow-ups into one; it keeps every source link (only after the user confirmed)")
     fum.add_argument("id", help="the follow-up to keep")
     fum.add_argument("others", nargs="+")
@@ -6945,7 +8426,7 @@ def main(argv: list[str]) -> int:
         "context": cmd_context, "resolve": cmd_resolve, "list": cmd_list, "search": cmd_search,
         "show": cmd_show, "new": cmd_new, "supersede": cmd_supersede, "lint": cmd_lint,
         "register": cmd_register, "open": cmd_open, "commit": cmd_commit, "inbox": cmd_inbox,
-        "backlog": cmd_backlog, "tracker": cmd_tracker, "work": cmd_work, "layout": cmd_layout, "followup": cmd_followup, "settings": cmd_settings, "today": cmd_today,
+        "backlog": cmd_backlog, "tracker": cmd_tracker, "sprint": cmd_sprint, "work": cmd_work, "layout": cmd_layout, "followup": cmd_followup, "settings": cmd_settings, "today": cmd_today,
         "sources": cmd_sources, "delete": cmd_delete, "move": cmd_move, "calendar": cmd_calendar,
         "reminder": cmd_reminder, "email": cmd_email, "goal": cmd_goal, "scopes": cmd_scopes, "tags": cmd_tags, "scope": cmd_scope, "project": cmd_project, "fact": cmd_fact, "crew": cmd_crew, "sync": cmd_sync, "share": cmd_share, "repos": cmd_repos, "factory": cmd_factory, "test": cmd_test, "scan": cmd_scan,
         "strategy": cmd_strategy, "people": cmd_people, "pr": cmd_pr, "discussion": cmd_discussion, "idea": cmd_idea, "research": cmd_research, "docs": cmd_docs,

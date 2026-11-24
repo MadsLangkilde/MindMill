@@ -1,8 +1,27 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
     var selectedGroup: KBGroup? { projectID.flatMap { index.group(of: $0) } }
+
+    static let lastScopeByProjectKey = "lastScopeByProject"
+
+    /// Switches to a project, on the scope last used in it, else its project-wide scope.
+    func selectGroup(_ group: String) {
+        guard let g = index.groups.first(where: { $0.id == group }) else { return }
+        let remembered = (UserDefaults.standard.dictionary(forKey: Self.lastScopeByProjectKey) as? [String: String])?[group]
+        let target = remembered.flatMap { g.scopes.contains($0) ? $0 : nil }
+            ?? g.scopes.first { index.project($0)?.wide == true } ?? g.scopes.first
+        if let target { selectProject(target) }
+    }
+
+    func rememberScope(_ scope: String) {
+        guard let group = index.group(of: scope)?.id else { return }
+        var map = UserDefaults.standard.dictionary(forKey: Self.lastScopeByProjectKey) as? [String: String] ?? [:]
+        map[group] = scope
+        UserDefaults.standard.set(map, forKey: Self.lastScopeByProjectKey)
+    }
 
     /// Other scopes of the project that the text names ("Android", "iOS", "Comet"…), for one-click tagging.
     func suggestedScopes(text: String, in scope: String, excluding: [String] = []) -> [KBProject] {

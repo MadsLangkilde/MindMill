@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
@@ -24,18 +25,15 @@ extension AppModel {
     }
 
     /// The tool tags can be written only to Azure DevOps for now; the others are reached through Claude's connectors.
-    func canAlignTags(_ item: TrackerBacklog.Item) -> Bool { trackerKind(item.scope) == "azure-devops" }
+    func canAlignTags(_ item: TrackerBacklog.Item) -> Bool { engine.backlog.canAlignTags(item) }
 
     /// Writes the item's aligned tags to the tool, after the user confirmed exactly these.
     func alignTags(_ item: TrackerBacklog.Item) {
-        let cli = cli
         busyWorkItems.insert(item.id)
         Task {
             defer { busyWorkItems.remove(item.id) }
             do {
-                let out = try await cli.run(["tracker", "tag", String(item.id), "--yes"])
-                notice = out.trimmingCharacters(in: .whitespacesAndNewlines)
-                refreshTracker()
+                notice = try await engine.backlog.alignTags(item)
             } catch {
                 errorMessage = error.localizedDescription
             }

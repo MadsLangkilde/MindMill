@@ -1,14 +1,14 @@
 {
-  "description": "Loads the project's knowledge-base index at session start, reports entries edited elsewhere before each prompt, and keeps Claude's own KB writes out of that report.",
+  "description": "Loads the project's knowledge-base index at session start, reports entries edited elsewhere before each prompt, and keeps Claude's own KB writes out of that report. Each hook runs bin/kb through the shell (sh on a Mac, Git Bash on Windows), which finds Python 3 on either.",
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kb.py", "hook", "session-start"], "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kb\" hook session-start", "timeout": 10 } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kb.py", "hook", "prompt"], "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kb\" hook prompt", "timeout": 5 } ] }
     ],
     "PostToolUse": [
-      { "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kb.py", "hook", "post-tool"], "timeout": 5 } ] }
+      { "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [ { "type": "command", "shell": "bash", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kb\" hook post-tool", "timeout": 5 } ] }
     ]
   }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
@@ -28,13 +29,7 @@ extension AppModel {
     }
 
     private func askAboutPR(_ pr: PullRequest, in session: WorkSession?, message: String, display: String) {
-        if let s = session ?? sessions(forKey: pr.sessionKey).first ?? sessionsLinked(to: pr).first {
-            send(message, in: s, display: display)
-            openSession(s)
-            return
-        }
-        newSession(title: "!\(pr.id) \(pr.title)", project: pr.scope.isEmpty ? nil : pr.scope, message: message,
-                   display: display, about: pr.sessionKey, space: .build)
+        engine.sessions.askAboutPR(pr, in: session, message: message, display: display)
     }
 }
 

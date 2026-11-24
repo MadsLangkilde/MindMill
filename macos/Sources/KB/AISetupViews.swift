@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// The assistants to pick the brain from: the one KB runs everything through, and whose name the app uses.

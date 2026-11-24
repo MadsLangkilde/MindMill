@@ -1,14 +1,10 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension AppModel {
     /// The scope's tracker kind from its settings: azure-devops, jira, local, github or none.
-    func trackerKind(_ scope: String) -> String {
-        if let k = trackerKindCache[scope] { return k }
-        let k = ProjectSettings.load(project: scope, root: rootURL).tracker.kind
-        trackerKindCache[scope] = k
-        return k
-    }
+    func trackerKind(_ scope: String) -> String { engine.tracker.kind(scope) }
 
     func loadLocalTracker(_ scope: String) {
         guard localTrackers[scope] == nil else { return }

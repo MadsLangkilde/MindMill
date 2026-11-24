@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 extension MeetingController {
@@ -48,7 +49,7 @@ extension MeetingController {
         chatInput = """
         Draft a \(kind) for this, as a proposed backlog entry in scope `\(scope)` with `--source \(id.rawValue)` (`kb new backlog --type \(bug ? "bug" : "pbi")`): \(brief)
         First check it doesn't exist: `kb list --section backlog` and `kb tracker items --search "<2–3 keywords>"`; if it does, tell me its number instead of writing a new one.
-        Write a clear title, a one-line summary and a body with the why, what and acceptance criteria. Name the meeting in words, never by KB id, since work items are shared. Don't create it in Azure DevOps.
+        Write a clear title, a one-line summary and a body with the why, what and acceptance criteria. Name the meeting in words, never by KB id, since work items are shared. \(WorkItemLinks.proposalRule) Don't create it in the tracker.
         """
         sendChat()
     }
@@ -189,7 +190,7 @@ struct MeetingPBISheet: View {
             Spacer()
             switch e.backlogStatus {
             case .proposed:
-                Button("Create in Azure DevOps…") { create = BacklogCreateRequest(entry: e.id) }
+                Button(BacklogBatchCreateSheet.createLabel(model.settings(for: e.project).tracker.kind) + "…") { create = BacklogCreateRequest(entry: e.id) }
                     .controlSize(.small)
             case .created:
                 if let wi = e.field("work_item") {

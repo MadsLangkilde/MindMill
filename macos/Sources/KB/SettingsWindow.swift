@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// The app's settings (⌘,), one pane per sidebar row so every pane stays reachable however many there are.
@@ -319,8 +320,7 @@ struct AboutSettingsView: View {
             Section("Where things are") {
                 pathRow("Knowledge base", model.rootURL.path)
                 pathRow("Plugin", KBConfig.expandTilde(model.pluginRootPath))
-                pathRow("App data", FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("KB").path)
+                pathRow("App data", AppPaths.data.path)
                 switch model.claudeAvailability {
                 case .found(let url): pathRow("claude CLI", url.path)
                 case .resolving: LabeledContent("claude CLI", value: "Looking…")

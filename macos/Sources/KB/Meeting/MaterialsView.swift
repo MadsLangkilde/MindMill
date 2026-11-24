@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Files and web pages added for the meeting, each with what Claude found in it. Files can be dropped here too.

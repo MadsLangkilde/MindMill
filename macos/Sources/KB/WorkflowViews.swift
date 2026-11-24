@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 // MARK: Shared bits
@@ -539,9 +540,16 @@ struct BacklogCard: View {
                     TagChips(tags: entry.tags, key: .backlog)
                 }
             }
+            BacklogLinksRow(entry: entry)
+            if status == .proposed, let best = model.unresolvedDuplicate(entry.id) {
+                Chip(text: "Possible duplicate of \(AppModel.shortTitle(best.label))", color: .orange, systemImage: "doc.on.doc")
+                    .help("Open Suggested backlog items to check it")
+            }
             if status == .proposed {
                 HStack(spacing: 12) {
-                    Button("Create in Azure DevOps…") { model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id) }
+                    Button(BacklogBatchCreateSheet.createLabel(model.settings(for: entry.project).tracker.kind) + "…") {
+                        model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id)
+                    }
                         .fontWeight(.semibold)
                     Button("Reject", role: .destructive) { model.rejectBacklog(entry.id) }
                 }
@@ -609,26 +617,35 @@ struct EntryActionBanner: View {
                     .disabled(busy)
             }
         case .backlog:
-            bar(color: .green) {
-                KindChip(kind: entry.backlogKind)
-                let prefix = model.settings(for: entry.project).tracker.titlePrefix
-                (Text(prefix).foregroundStyle(.secondary) + Text(entry.title)).lineLimit(1)
-            } actions: {
-                if busy { ProgressView().controlSize(.small) }
-                switch entry.backlogStatus {
-                case .proposed:
-                    Button("Reject", role: .destructive) { model.rejectBacklog(entry.id) }.disabled(busy)
-                    Button("Create in Azure DevOps…") { model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id) }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(busy)
-                case .created:
-                    if let wi = entry.field("work_item"), let u = entry.field("url").flatMap(URL.init(string:)) {
-                        Link("Work item #\(wi)", destination: u)
-                    } else {
-                        Chip(text: "Created", color: .green)
+            VStack(spacing: 0) {
+                bar(color: .green) {
+                    KindChip(kind: entry.backlogKind)
+                    let prefix = model.settings(for: entry.project).tracker.titlePrefix
+                    (Text(prefix).foregroundStyle(.secondary) + Text(entry.title)).lineLimit(1)
+                } actions: {
+                    if busy { ProgressView().controlSize(.small) }
+                    switch entry.backlogStatus {
+                    case .proposed:
+                        Button("Reject", role: .destructive) { model.rejectBacklog(entry.id) }.disabled(busy)
+                        Button(BacklogBatchCreateSheet.createLabel(model.settings(for: entry.project).tracker.kind) + "…") {
+                            model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id)
+                        }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(busy)
+                    case .created:
+                        if let wi = entry.field("work_item"), let u = entry.field("url").flatMap(URL.init(string:)) {
+                            Link("Work item #\(wi)", destination: u)
+                        } else {
+                            Chip(text: "Created", color: .green)
+                        }
+                    case .rejected:
+                        Chip(text: "Rejected", color: .gray)
                     }
-                case .rejected:
-                    Chip(text: "Rejected", color: .gray)
+                }
+                if entry.backlogStatus == .proposed, let f = model.duplicateFindings(for: [entry])[entry.id], f.verdict != .none {
+                    DuplicateBox(entry: entry, finding: f)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                 }
             }
         case .discussions:

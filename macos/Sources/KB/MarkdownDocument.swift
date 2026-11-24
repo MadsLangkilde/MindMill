@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// Answers to a ```choices block, when the reply is waiting on the user.

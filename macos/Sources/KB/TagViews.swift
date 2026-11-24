@@ -1,4 +1,5 @@
 import KBCore
+import KBEngine
 import SwiftUI
 
 /// One tag as a small tinted capsule. With `key`, clicking it filters that list by the tag.

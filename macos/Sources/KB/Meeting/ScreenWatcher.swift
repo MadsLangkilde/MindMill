@@ -1,5 +1,6 @@
 import AppKit
 import KBCore
+import KBEngine
 @preconcurrency import ScreenCaptureKit
 import Vision
 
