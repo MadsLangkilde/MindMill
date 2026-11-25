@@ -289,7 +289,7 @@ struct PrepareStage: View {
                             Text(c.suggested.questions.isEmpty ? "None yet." : "None picked yet.")
                                 .foregroundStyle(.secondary)
                         }
-                        ForEach(c.questions.questions) { q in
+                        ForEach(c.questions.questions, id: \.preparedRowID) { q in
                             QuestionEditRow(c: c, question: q)
                         }
                         HStack(spacing: 8) {
@@ -315,7 +315,7 @@ struct PrepareStage: View {
                     }
                     if !c.suggested.questions.isEmpty {
                         Section {
-                            ForEach(c.suggested.questions) { q in
+                            ForEach(c.suggested.questions, id: \.suggestedRowID) { q in
                                 SuggestionRow(c: c, question: q)
                             }
                         } header: {
@@ -452,6 +452,12 @@ struct QuestionEditRow: View {
 }
 
 /// A suggestion: + picks it for the meeting, × drops it.
+/// Both lists number their questions by line, so one List needs ids that can't collide between them.
+private extension QuestionList.Question {
+    var preparedRowID: String { "prepared-\(id)" }
+    var suggestedRowID: String { "suggested-\(id)" }
+}
+
 struct SuggestionRow: View {
     @Bindable var c: MeetingController
     let question: QuestionList.Question

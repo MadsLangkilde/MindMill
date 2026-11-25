@@ -177,13 +177,17 @@ struct FactGraphView: View {
         let visible = points.filter { shown?.contains($0.key) ?? true }
         let box = FactGraph.bounds(Array(visible.values)) ?? (minX: -1, minY: -1, maxX: 1, maxY: 1)
         return GeometryReader { geo in
-            let fit = min(geo.size.width / max(box.maxX - box.minX + 80, 1), geo.size.height / max(box.maxY - box.minY + 80, 1))
+            // Margins in points, so the outer dots keep room for their labels however narrow the column is.
+            let side: CGFloat = 90, top: CGFloat = 24, bottom: CGFloat = 44
+            let usableW = max(geo.size.width - side * 2, 40), usableH = max(geo.size.height - top - bottom, 40)
+            let fit = min(usableW / max(box.maxX - box.minX, 80), usableH / max(box.maxY - box.minY, 80))
             let k = fit * scale
             let cx = (box.minX + box.maxX) / 2, cy = (box.minY + box.maxY) / 2
             let toScreen = { (p: FactGraph.Point) -> CGPoint in
-                CGPoint(x: (p.x - cx) * k + geo.size.width / 2 + offset.width, y: (p.y - cy) * k + geo.size.height / 2 + offset.height)
+                CGPoint(x: (p.x - cx) * k + geo.size.width / 2 + offset.width,
+                        y: (p.y - cy) * k + top + usableH / 2 + offset.height)
             }
-            Canvas { ctx, _ in
+            Canvas { ctx, size in
                 for e in edges {
                     guard let a = visible[e.a], let b = visible[e.b] else { continue }
                     let lit = near.map { $0.contains(e.a) && $0.contains(e.b) } ?? false
@@ -194,6 +198,7 @@ struct FactGraphView: View {
                                lineWidth: lit ? 2 : 1)
                 }
                 let labelAll = k > 1.1 || visible.count <= 25
+                var labels: [(rank: Int, text: GraphicsContext.ResolvedText, at: CGPoint, size: CGSize)] = []
                 for (id, p) in visible {
                     let s = toScreen(p)
                     let entry = byID[id]
@@ -202,11 +207,27 @@ struct FactGraphView: View {
                     let dot = Path(ellipseIn: CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2))
                     ctx.fill(dot, with: .color(Self.colour(for: entry?.tags.first).opacity(dim ? 0.2 : 1)))
                     if id == selected { ctx.stroke(dot, with: .color(.primary), lineWidth: 2) }
-                    let label = labelAll || id == selected || (near?.contains(id) ?? false) || (matching?.contains(id) ?? false)
-                    if label, let title = entry?.title {
-                        let short = title.count > 40 ? String(title.prefix(38)) + "…" : title
-                        ctx.draw(Text(short).font(.caption2).foregroundStyle(dim ? Color.secondary.opacity(0.4) : Color.primary),
-                                 at: CGPoint(x: s.x, y: s.y + r + 7), anchor: .top)
+                    let lit = (near?.contains(id) ?? false) || (matching?.contains(id) ?? false)
+                    guard labelAll || id == selected || lit, let title = entry?.title else { continue }
+                    let short = title.count > 40 ? String(title.prefix(38)) + "…" : title
+                    let text = ctx.resolve(Text(short).font(.caption2)
+                        .foregroundStyle(dim ? Color.secondary.opacity(0.4) : Color.primary))
+                    labels.append((id == selected ? 0 : lit ? 1 : 2, text, CGPoint(x: s.x, y: s.y + r + 7),
+                                   text.measure(in: CGSize(width: 400, height: 40))))
+                }
+                // Labels never overlap: the picked and lit ones go first, a later one moves down a line or two, and
+                // one that still collides is left out until zooming in makes room.
+                var taken: [CGRect] = []
+                for l in labels.sorted(by: { $0.rank < $1.rank }) {
+                    let half = l.size.width / 2 + 4
+                    let x = size.width > half * 2 ? min(max(l.at.x, half), size.width - half) : size.width / 2
+                    for step in 0..<3 {
+                        let rect = CGRect(x: x - half, y: l.at.y + CGFloat(step) * (l.size.height + 1), width: half * 2,
+                                          height: l.size.height)
+                        guard l.rank == 0 || !taken.contains(where: { $0.intersects(rect) }) else { continue }
+                        taken.append(rect)
+                        ctx.draw(l.text, at: CGPoint(x: x, y: rect.minY), anchor: .top)
+                        break
                     }
                 }
             }

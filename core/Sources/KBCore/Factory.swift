@@ -925,6 +925,31 @@ public enum FactoryBrief {
         "A \(kind) changed while you work: “\(title)” (`\(id)`)\(summary.isEmpty ? "" : ": \(summary)"). Read it with `kb show \(id)` if it may matter. If it affects your work, adjust and log it with `kb factory log`; otherwise carry on and say nothing about it."
     }
 
+    /// A fact or decision that changed, for `factsChanged`.
+    public struct FactChange: Equatable, Sendable {
+        public let kind: String
+        public let title: String
+        public let id: String
+        public let summary: String
+
+        public init(kind: String, title: String, id: String, summary: String) {
+            self.kind = kind
+            self.title = title
+            self.id = id
+            self.summary = summary
+        }
+    }
+
+    /// One message for everything that changed at once, so filing a meeting doesn't send a session one per entry.
+    public static func factsChanged(_ changes: [FactChange]) -> String? {
+        guard let first = changes.first else { return nil }
+        if changes.count == 1 { return factChanged(first.title, id: first.id, summary: first.summary, kind: first.kind) }
+        let lines = changes.map { c in
+            "- \(c.kind.prefix(1).uppercased() + c.kind.dropFirst()) “\(c.title)” (`\(c.id)`)\(c.summary.isEmpty ? "" : ": \(c.summary)")"
+        }
+        return "\(changes.count) facts and decisions changed while you work:\n\(lines.joined(separator: "\n"))\n\nRead the ones that may matter with `kb show <id>`. If one affects your work, adjust and log it with `kb factory log`; otherwise carry on and say nothing about it."
+    }
+
     public static func answer(_ question: String, _ answer: String) -> String {
         "Answer to your question “\(question)”:\n\n\(answer)\n\nIf the answer is knowledge others would need too, propose it as a fact as your brief says."
     }

@@ -38,10 +38,10 @@ struct ContentView: View {
                 .searchable(
                     text: $model.searchText,
                     placement: .toolbar,
-                    prompt: model.searchAllProjects ? "Search or describe it (all scopes)" : "Search or describe it in \(model.project?.title ?? "scope")"
+                    prompt: model.searchAllProjects ? "Search all scopes" : "Search or describe it"
                 )
                 .modifier(SearchFocus(focused: $searchFocused))
-                .onChange(of: model.findRequest) { _, _ in if model.mode == .plan { searchFocused = true } }
+                .onChange(of: model.findRequest) { _, _ in if model.mode == .plan, !model.findSearchesSession { searchFocused = true } }
                 .modifier(ModeFadeIn())
             }
         }

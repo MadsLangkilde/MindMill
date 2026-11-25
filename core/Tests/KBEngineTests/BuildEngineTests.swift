@@ -146,6 +146,10 @@ import Testing
         #expect(hub.session(built["id"]?.string)?.isAssistant == false)
         #expect(hub.session(built["id"]?.string)?.space == .build)
         _ = try await engine.call("session.send", ["id": .string(build.id), "text": "Hello", "spoken": true], from: c)
+        let stopped = try await engine.call("session.stop", ["id": .string(build.id)], from: c)
+        #expect(stopped["stopped"]?.bool == true)
+        #expect(hub.session(build.id)?.chat.isBusy == false)
+        await #expect(throws: RemoteError.self) { _ = try await engine.call("session.stop", ["id": "nope"], from: c) }
         let items = try await engine.call("tracker.items", ["scope": "alpha"], from: c)
         #expect(items["items"]?.array?.isEmpty == true)
     }

@@ -538,8 +538,16 @@ struct ChatTranscript: View {
                     if chat.items.isEmpty, let emptyHint {
                         Text(emptyHint).font(.callout).foregroundStyle(.secondary).padding(.top, 8)
                     }
-                    ForEach(chat.items) { item in
-                        ChatBubble(item: item, choose: chooser(for: item)).id(item.id)
+                    let marks = TranscriptTimes.marks(chat.items.map(\.timeEntry))
+                    ForEach(Array(chat.items.enumerated()), id: \.element.id) { i, item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let day = marks[i].day { DayHeading(title: day).padding(.vertical, 2) }
+                            ChatBubble(item: item, choose: chooser(for: item)).id(item.id)
+                            if let time = marks[i].time, let at = item.at {
+                                MessageTime(text: time, at: at)
+                                    .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
+                            }
+                        }
                     }
                     if chat.isBusy {
                         HStack(spacing: 8) {
@@ -567,6 +575,17 @@ extension ChatTranscript {
         guard let onChoice, !chat.isBusy, item.role == .assistant,
               chat.items.last(where: { $0.role == .assistant || $0.role == .user })?.id == item.id else { return nil }
         return onChoice
+    }
+}
+
+extension ClaudeChat.Item {
+    var timeEntry: TranscriptTimes.Entry {
+        let side: TranscriptTimes.Side = switch role {
+        case .user: .user
+        case .assistant, .error: .reply
+        case .status, .tool: .other
+        }
+        return .init(at: at, side: side)
     }
 }
 

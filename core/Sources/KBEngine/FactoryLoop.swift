@@ -379,17 +379,23 @@ public final class FactoryLoop {
         run.facts = now
         guard !changed.isEmpty else { return }
         let index = engine.index
+        var bySession: [String: [FactoryBrief.FactChange]] = [:]
         for raw in changed {
             guard let id = EntryID(raw), let e = index.entry(id) else { continue }
             let everywhere = id.project == overviewScopeID
             let kind = id.section == .decisions ? "decision" : "fact"
             var told = 0
             for t in run.activeTasks where everywhere || t.scope == id.project {
-                guard let s = sessions.session(t.sessionID) else { continue }
-                sessions.deliver(FactoryBrief.factChanged(e.title, id: raw, summary: e.summary, kind: kind), to: s, from: "the factory")
+                guard sessions.session(t.sessionID) != nil else { continue }
+                bySession[t.sessionID, default: []].append(.init(kind: kind, title: e.title, id: raw, summary: e.summary))
                 told += 1
             }
             run.log("\(kind.capitalized) “\(e.title)” changed" + (told > 0 ? "; told \(told) session\(told == 1 ? "" : "s")." : "."), kind: .fact)
+        }
+        for t in run.activeTasks {
+            guard let changes = bySession.removeValue(forKey: t.sessionID), let s = sessions.session(t.sessionID),
+                  let text = FactoryBrief.factsChanged(changes) else { continue }
+            sessions.deliver(text, to: s, from: "the factory")
         }
         let known = changed.compactMap { EntryID($0).flatMap { index.entry($0) } }.map(Self.known)
         checkCoverage(known: known, open: run.openQuestions)

@@ -137,6 +137,7 @@ struct StrategiesSheet: View {
             .padding(12)
         }
         .frame(width: 860, height: 620)
+        .onExitCommand { dismiss() }
         .onAppear { if selected == nil { selected = model.strategies.first?.slug } }
         .sheet(item: $editing) { StrategyEditorSheet(request: $0) }
         .confirmationDialog("Delete “\(current?.title ?? "")”?", isPresented: $confirmDelete) {

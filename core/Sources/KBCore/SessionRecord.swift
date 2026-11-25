@@ -6,10 +6,13 @@ public struct SessionRecord: Codable, Identifiable, Equatable, Sendable {
         public var role: String
         public var text: String
         public var attachments: [Attachment]?
-        public init(role: String, text: String, attachments: [Attachment]? = nil) {
+        /// When it was sent or arrived; nil for messages saved before times were kept.
+        public var at: Date?
+        public init(role: String, text: String, attachments: [Attachment]? = nil, at: Date? = nil) {
             self.role = role
             self.text = text
             self.attachments = attachments
+            self.at = at
         }
     }
 

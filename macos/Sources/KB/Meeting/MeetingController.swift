@@ -116,7 +116,7 @@ final class MeetingController {
     // MARK: Kept between windows
 
     private struct SavedChat: Codable {
-        struct Message: Codable { var role: String; var text: String }
+        struct Message: Codable { var role: String; var text: String; var at: Date? }
         var messages: [Message]
         var draft: String
         var questionsExpanded: Bool
@@ -131,7 +131,7 @@ final class MeetingController {
 
     private func restoreChat() {
         guard let data = try? Data(contentsOf: chatURL), let saved = try? JSONDecoder().decode(SavedChat.self, from: data) else { return }
-        chat.items = saved.messages.map { ClaudeChat.Item(role: ClaudeChat.Role(rawValue: $0.role) ?? .assistant, text: $0.text) }
+        chat.items = saved.messages.map { ClaudeChat.Item(role: ClaudeChat.Role(rawValue: $0.role) ?? .assistant, text: $0.text, at: $0.at) }
         chatInput = saved.draft
         questionsExpanded = saved.questionsExpanded
     }
@@ -139,7 +139,7 @@ final class MeetingController {
     func saveChat() {
         let kept = chat.items.filter { $0.role == .user || $0.role == .assistant || $0.role == .error }
         guard !kept.isEmpty || !chatInput.isEmpty || FileManager.default.fileExists(atPath: chatURL.path) else { return }
-        let saved = SavedChat(messages: kept.map { .init(role: $0.role.rawValue, text: $0.text) }, draft: chatInput,
+        let saved = SavedChat(messages: kept.map { .init(role: $0.role.rawValue, text: $0.text, at: $0.at) }, draft: chatInput,
                               questionsExpanded: questionsExpanded)
         guard let data = try? JSONEncoder().encode(saved) else { return }
         try? FileManager.default.createDirectory(at: chatURL.deletingLastPathComponent(), withIntermediateDirectories: true)

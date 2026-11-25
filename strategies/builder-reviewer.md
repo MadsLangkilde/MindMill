@@ -11,5 +11,5 @@ model: opus
 2. **Build in small steps.** Once `kb crew status` lists the reviewer under you, note its id. After each
    step, send it what changed and why: `kb crew send <reviewer id> "<step, files, what to look at>"`.
 3. **Fix its findings** before the next step. When you disagree with one, say why in your reply to it.
-4. When every step is reviewed and the tests pass, sum up for the user. Never commit or push without
+4. **Sum up.** When every step is reviewed and the tests pass, sum up for the user. Never commit or push without
    their yes.

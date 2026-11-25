@@ -285,4 +285,16 @@ struct FactoryTests {
         let tiny = SidePanelFit.widths(available: 100, divider: 1, preferred: 306, panelMin: 200, mainMin: 320)
         #expect(tiny.panel == 99 && tiny.main == 0)
     }
+
+    @Test func changedFactsGoOutAsOneMessage() {
+        #expect(FactoryBrief.factsChanged([]) == nil)
+        let one = FactoryBrief.FactChange(kind: "fact", title: "The CDN supports range requests", id: "app/facts/cdn", summary: "")
+        #expect(FactoryBrief.factsChanged([one]) == FactoryBrief.factChanged(one.title, id: one.id, summary: "", kind: "fact"))
+        let two = FactoryBrief.FactChange(kind: "decision", title: "Warn below 20% storage", id: "app/decisions/warn", summary: "Agreed")
+        let text = FactoryBrief.factsChanged([one, two]) ?? ""
+        #expect(text.hasPrefix("2 facts and decisions changed while you work:"))
+        #expect(text.contains("- Fact “The CDN supports range requests” (`app/facts/cdn`)\n"))
+        #expect(text.contains("- Decision “Warn below 20% storage” (`app/decisions/warn`): Agreed"))
+        #expect(text.components(separatedBy: "kb factory log").count == 2)
+    }
 }

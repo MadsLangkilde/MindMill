@@ -206,9 +206,7 @@ extension MindmillEngine {
             sessions.loadIfNeeded()
             guard let s = sessions.session(p["id"]?.string) else { throw RemoteError.notFound("No such session") }
             let since = max(0, p["since"]?.int ?? 0)
-            let items = s.chat.items.dropFirst(since).map { item -> JSONValue in
-                ["role": .string(item.role.rawValue), "text": .string(item.text)]
-            }
+            let items = s.chat.items.dropFirst(since).map(Self.itemJSON)
             return ["session": sessionJSON(s), "items": .array(items), "count": .number(Double(s.chat.items.count)),
                     "denials": .array(s.chat.denials.map(JSONValue.string))]
         }
@@ -234,6 +232,13 @@ extension MindmillEngine {
                                         message: spoken ? message.map(SpokenReply.message) : message, display: spoken ? message : nil,
                                         about: assistant ? SessionRecord.assistantAbout : nil, show: false, space: space)
             return ["id": .string(s.id)]
+        }
+
+        m.register("session.stop") { [unowned self] _, p in
+            sessions.loadIfNeeded()
+            guard let s = sessions.session(p["id"]?.string) else { throw RemoteError.notFound("No such session") }
+            if s.chat.isBusy { sessions.stop(s) }
+            return ["stopped": true]
         }
 
         m.register("session.archive") { [unowned self] _, p in
@@ -318,7 +323,7 @@ extension MindmillEngine {
             let items = s.chat.items.filter { $0.role == .user || $0.role == .assistant }.suffix(p["last"]?.int ?? 4)
             let last = items.last { $0.role == .assistant }?.text ?? ""
             return ActionResult(last.isEmpty ? "Nothing from \(Brain.name) yet." : String(last.prefix(600)),
-                                data: ["items": .array(items.map { ["role": .string($0.role.rawValue), "text": .string($0.text)] })])
+                                data: ["items": .array(items.map(Self.itemJSON))])
         }
         a.register("session.start") { [unowned self] p in
             let space: SessionSpace = p["space"]?.string == "build" ? .build : .plan
@@ -562,5 +567,14 @@ extension MindmillEngine {
         sessions.loadIfNeeded()
         guard let s = sessions.session(p["id"]?.string) else { throw ActionError("No such session.") }
         return s
+    }
+}
+
+extension MindmillEngine {
+    /// A transcript item for the phones: `at` (ISO 8601) only when the time is known.
+    static func itemJSON(_ item: ClaudeChat.Item) -> JSONValue {
+        var o: [String: JSONValue] = ["role": .string(item.role.rawValue), "text": .string(item.text)]
+        if let at = item.at { o["at"] = .string(ISO8601DateFormatter().string(from: at)) }
+        return .object(o)
     }
 }

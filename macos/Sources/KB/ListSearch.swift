@@ -52,7 +52,12 @@ struct ListSearchField: View {
             TextField(prompt, text: text)
                 .textFieldStyle(.plain)
                 .focused($focused)
-                .onExitCommand { text.wrappedValue = "" }
+                // Escape clears a search; with nothing to clear it goes on, so a sheet around the field still closes.
+                .onKeyPress(.escape) {
+                    guard !text.wrappedValue.isEmpty else { return .ignored }
+                    text.wrappedValue = ""
+                    return .handled
+                }
                 .onChange(of: model.findRequest) { _, _ in if takesFind { focused = true } }
             if !text.wrappedValue.isEmpty {
                 Button {

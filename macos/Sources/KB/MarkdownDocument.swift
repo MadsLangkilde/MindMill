@@ -15,6 +15,7 @@ struct ChoiceHandler {
 struct MarkdownDocument: View {
     let text: String
     var choices: ChoiceHandler?
+    @Environment(\.findHighlight) private var highlight
 
     var body: some View {
         let blocks = MarkdownBlocks.parse(text)
@@ -31,11 +32,11 @@ struct MarkdownDocument: View {
     private func view(for block: MarkdownBlock) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(Self.inline(text))
+            Text(marked(text))
                 .font(level == 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : .headline)
                 .padding(.top, level <= 2 ? 6 : 2)
         case .paragraph(let text):
-            Text(Self.inline(text)).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+            Text(marked(text)).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
         case .listItem(let indent, let marker, let checked, let text):
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 if let checked {
@@ -45,7 +46,7 @@ struct MarkdownDocument: View {
                     Text(marker).foregroundStyle(.secondary).monospacedDigit()
                         .frame(minWidth: marker.count > 1 ? 18 : 8, alignment: .trailing)
                 }
-                Text(Self.inline(text)).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                Text(marked(text)).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.leading, CGFloat(indent) * 18 + 4)
         case .code(let language, let code):
@@ -53,7 +54,7 @@ struct MarkdownDocument: View {
         case .quote(let text):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 1).fill(Color.accentColor.opacity(0.5)).frame(width: 3)
-                Text(Self.inline(text)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(marked(text)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         case .table(let header, let rows):
             MarkdownTable(header: header, rows: rows)
@@ -70,6 +71,33 @@ struct MarkdownDocument: View {
 
     static func inline(_ text: String) -> AttributedString {
         EntryIDLinks.attributed(text)
+    }
+
+    private func marked(_ text: String) -> AttributedString {
+        Self.inline(text).highlighting(highlight)
+    }
+}
+
+extension EnvironmentValues {
+    /// What ⌘F in a conversation looks for: the messages mark every place it appears.
+    @Entry var findHighlight = ""
+}
+
+extension AttributedString {
+    /// The same text with every place `query` appears marked, as a found word is in other apps.
+    func highlighting(_ query: String) -> AttributedString {
+        let plain = String(characters)
+        let found = TextFind.ranges(of: query, in: plain)
+        guard !found.isEmpty else { return self }
+        var out = self
+        for r in found {
+            let lo = plain.distance(from: plain.startIndex, to: r.lowerBound)
+            let hi = plain.distance(from: plain.startIndex, to: r.upperBound)
+            let a = out.characters.index(out.startIndex, offsetBy: lo), b = out.characters.index(out.startIndex, offsetBy: hi)
+            out[a..<b].backgroundColor = Color.yellow.opacity(0.55)
+            out[a..<b].foregroundColor = Color.black
+        }
+        return out
     }
 }
 
@@ -136,6 +164,7 @@ struct CodeBlock: View {
     let language: String
     let code: String
     @State private var copied = false
+    @Environment(\.findHighlight) private var highlight
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -156,7 +185,7 @@ struct CodeBlock: View {
             .padding(.vertical, 5)
             Divider()
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
+                Text(AttributedString(code).highlighting(highlight))
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(10)
@@ -173,6 +202,7 @@ struct CodeBlock: View {
 struct MarkdownTable: View {
     let header: [String]
     let rows: [[String]]
+    @Environment(\.findHighlight) private var highlight
 
     private static let maxColumn: CGFloat = 300
     private static let minColumn: CGFloat = 40
@@ -199,7 +229,7 @@ struct MarkdownTable: View {
     private func row(_ cells: [String], widths: [CGFloat], bold: Bool) -> some View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(0..<widths.count, id: \.self) { i in
-                Text(MarkdownDocument.inline(i < cells.count ? cells[i] : ""))
+                Text(MarkdownDocument.inline(i < cells.count ? cells[i] : "").highlighting(highlight))
                     .font(bold ? .callout.weight(.semibold) : .callout)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(width: widths[i], alignment: .topLeading)

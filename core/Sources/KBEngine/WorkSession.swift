@@ -61,14 +61,14 @@ public final class WorkSession: Identifiable {
         researchOffered = record.researchOffered ?? false
         chat.showsTools = true
         chat.items = record.messages.map {
-            ClaudeChat.Item(role: ClaudeChat.Role(rawValue: $0.role) ?? .status, text: $0.text, attachments: $0.attachments ?? [])
+            ClaudeChat.Item(role: ClaudeChat.Role(rawValue: $0.role) ?? .status, text: $0.text, attachments: $0.attachments ?? [], at: $0.at)
         }
     }
 
     public var record: SessionRecord {
         SessionRecord(id: id, title: title, project: project, claudeSessionID: claudeSessionID,
                       workingDirectory: workingDirectory.path, created: created, updated: updated, extraTools: extraTools,
-                      messages: chat.items.filter { $0.role != .status }.map { .init(role: $0.role.rawValue, text: $0.text, attachments: $0.attachments.isEmpty ? nil : $0.attachments) },
+                      messages: chat.items.filter { $0.role != .status }.map { .init(role: $0.role.rawValue, text: $0.text, attachments: $0.attachments.isEmpty ? nil : $0.attachments, at: $0.at) },
                       role: role, parentID: parentID, strategy: strategy, model: model, about: about,
                       strategyOffered: strategyOffered, space: space, archived: archived,
                       researchOffered: researchOffered ? true : nil)

@@ -15,12 +15,15 @@ public final class ClaudeChat {
         public var tag: String?
         /// Files and images sent with a user message, shown with it.
         public var attachments: [Attachment] = []
+        /// When it was sent or arrived; nil for a message restored from before times were kept.
+        public var at: Date?
 
-        public init(role: Role, text: String, tag: String? = nil, attachments: [Attachment] = []) {
+        public init(role: Role, text: String, tag: String? = nil, attachments: [Attachment] = [], at: Date? = Date()) {
             self.role = role
             self.text = text
             self.tag = tag
             self.attachments = attachments
+            self.at = at
         }
     }
 

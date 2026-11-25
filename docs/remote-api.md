@@ -88,9 +88,10 @@ payload. Headers:
 | `facts.proposed` | `scope` | `entries[]` |
 | `tracker.items` | `scope`, `mine?` | `me`, `items[]` (as the app's backlog: id, type, title, state, stage, sprint, assignee, tags…) |
 | `sessions.list` | `scope?`, `archived?` (true includes archived ones) | `sessions[]`: `id, title, space (plan/build), role (solo/lead/member/overseer, or assistant for the assistant session), scope, state, busy, updated, count, needsYou, archived, lead? (a member's lead session id: show it under that lead), kind?, kindTitle?, origin?, link?`; see [Plan sessions](#plan-sessions) |
-| `session.get` | `id`, `since?` (items already seen) | `session`, `items[]` (`role`: user/assistant/error/status/tool, `text`), `count`, `denials[]` (what Claude was refused in its last turn, such as `Bash(npm run build)`; empty unless `session.state` is `blocked`) |
+| `session.get` | `id`, `since?` (items already seen) | `session`, `items[]` (`role`: user/assistant/error/status/tool, `text`, `at?`: ISO 8601 time it was sent or arrived, missing for items from before times were kept), `count`, `denials[]` (what Claude was refused in its last turn, such as `Bash(npm run build)`; empty unless `session.state` is `blocked`) |
 | `session.send` | `id`, `text`, `spoken?` (true: said out loud and the reply will be read aloud) | `sent` |
 | `session.new` | `space`, `title?`, `scope?`, `message?`, `spoken?` (as for `session.send`), `assistant?` (Plan only: an assistant session, as `assistant.open` makes) | `id` |
+| `session.stop` | `id` | `stopped`: stops what the session is doing, without asking (Mac 2026-11-24 and later; before that, run the `session.stop` action, which asks first) |
 | `session.archive` | `id`, `archived` (false takes it out of the archive) | `archived` |
 | `app.structure` | `scope?` | `scope`, `modes[]`; see [App structure](#app-structure) |
 | `kb.run` | `args[]`, `stdin?` | `output`: runs the `kb` command; reaches whatever has no method yet |
@@ -704,7 +705,7 @@ Lists of entries use the entry summary of `entries.list` (`id, section, scope, t
 | `factory.create`, `factory.duplicate` | `id` (`factory.create` also `problems[]`: it is made even when it can't start yet) |
 | `strategies.list` | `strategies[]`: `slug, title, summary, origin (builtIn/custom/override), model, sessions, spawns`; `strategy.get` adds `instructions` |
 | `sessions.list` | `sessions[]` as the `sessions.list` method |
-| `session.read` | `items[]`: `role, text` |
+| `session.read` | `items[]`: `role, text, at?` |
 | `scans.list` | `scans[]`: `id, scope, kinds[], running, failed, note, findings[]{id, kind, title, summary, status}` |
 | `people.list` | `people[]`: `name, email` |
 | `settings.get` | `ai{brain, tasks{<task>: {title, provider, model}}, providers[]{id, name, models[]}}`, `voice{engine, provider?, rate, language, bargeIn, confirmsRisky}`, `meetings{language, languages[]{id, name}, microphone, computerAudio}`, `general{appearance, openIn, morning, calendarMinutes}`, `remote{enabled, port, phones[]}` |

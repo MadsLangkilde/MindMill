@@ -191,6 +191,12 @@ final class AppModel {
     var claudeFind = ClaudeFind()
     /// Counts ⌘F presses, so the view in front can open its find bar.
     var findRequest = 0
+    /// The Plan conversation on screen, which ⌘F searches instead of the knowledge base.
+    var planFindTarget: String?
+    /// ⌘F in Plan goes to the conversation on screen rather than the toolbar search.
+    var findSearchesSession: Bool {
+        planFindTarget != nil && (sidebarSelection == .sessions || sidebarSelection == .section(.research))
+    }
     var workItemDetailLoading: Set<Int> = []
     var projectPane: ProjectPane = .home
     var addProjectRequest: AddProjectRequest?

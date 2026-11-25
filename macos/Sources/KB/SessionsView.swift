@@ -159,9 +159,10 @@ struct SessionView: View {
         .onAppear { inputFocused = true }
         .onChange(of: model.findRequest) { _, _ in
             guard isInFront else { return }
-            finding = true
-            findFocused = true
+            openFind()
         }
+        .onAppear { if session.space == .plan { model.planFindTarget = session.id } }
+        .onDisappear { if model.planFindTarget == session.id { model.planFindTarget = nil } }
     }
 
     /// The session the user sees: the one picked in Build, the Overview when nothing is, or the one open in the
@@ -170,16 +171,21 @@ struct SessionView: View {
         if session.space == .build {
             return model.mode == .build && (model.buildSelection == session.id || (session.role == .overseer && model.buildSelection == nil))
         }
-        return model.selectedSessionID == session.id
+        return model.planFindTarget == session.id || model.selectedSessionID == session.id
     }
 
     // MARK: Find
 
     /// The messages that have the text searched for, in order.
     private var findMatches: [UUID] {
-        let q = findText.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return [] }
-        return groups.filter { g in g.items.contains { $0.text.localizedCaseInsensitiveContains(q) } }.map(\.id)
+        guard !TextFind.query(findText).isEmpty else { return [] }
+        return groups.filter { g in g.items.contains { TextFind.contains($0.text, findText) } }.map(\.id)
+    }
+
+    private func openFind() {
+        finding = true
+        findFocused = true
+        if !findText.isEmpty { scrollTarget = findMatches.first }
     }
 
     private var findBar: some View {
@@ -194,7 +200,7 @@ struct SessionView: View {
                     findIndex = 0
                     scrollTarget = findMatches.first
                 }
-            Text(findText.isEmpty ? "" : matches.isEmpty ? "No matches" : "\(min(findIndex, matches.count - 1) + 1) of \(matches.count)")
+            Text(TextFind.position(current: findIndex, count: matches.count, query: findText))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .fixedSize()
             Button { step(-1) } label: { Image(systemName: "chevron.up") }
@@ -267,6 +273,8 @@ struct SessionView: View {
         }
         if session.space == .build, session.role != .overseer, session.project != nil { TestHeaderButton(session: session) }
         if session.role != .overseer { StrategyButton(session: session) }
+        Button { finding ? closeFind() : openFind() } label: { Label("Find", systemImage: "magnifyingglass") }
+            .help(finding ? "Close the search" : "Find in this conversation (⌘F)")
         if session.space == .plan { PlanArchiveButton(session: session) }
         if session.chat.isBusy {
             Button { model.stopSession(session) } label: { Label("Stop", systemImage: "stop.circle") }
@@ -358,15 +366,26 @@ struct SessionView: View {
                     }
                     let matches = finding ? findMatches : []
                     let current = matches.isEmpty ? nil : matches[min(findIndex, matches.count - 1)]
-                    ForEach(groups) { group in
-                        groupView(group).id(group.id)
-                            .padding(matches.contains(group.id) ? 6 : 0)
-                            .background {
-                                if matches.contains(group.id) {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.yellow.opacity(group.id == current ? 0.28 : 0.1))
+                    let shown = groups
+                    let marks = TranscriptTimes.marks(shown.map(\.timeEntry))
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { i, group in
+                        VStack(alignment: .leading, spacing: 5) {
+                            if let day = marks[i].day { DayHeading(title: day).padding(.bottom, 4) }
+                            groupView(group).id(group.id)
+                                .padding(matches.contains(group.id) ? 6 : 0)
+                                .background {
+                                    if matches.contains(group.id) {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.yellow.opacity(group.id == current ? 0.16 : group.isTools ? 0.08 : 0))
+                                            .overlay(RoundedRectangle(cornerRadius: 8)
+                                                .strokeBorder(Color.yellow.opacity(group.id == current ? 0.7 : 0), lineWidth: 1.5))
+                                    }
                                 }
+                            if let time = marks[i].time, let at = group.items.first?.at {
+                                MessageTime(text: time, at: at)
+                                    .frame(maxWidth: .infinity, alignment: group.items.first?.role == .user ? .trailing : .leading)
                             }
+                        }
                     }
                     if session.chat.isBusy {
                         WorkingIndicator(activity: session.chat.activity).id("busy")
@@ -375,6 +394,7 @@ struct SessionView: View {
                 .padding(.horizontal, 22)
                 .padding(.top, 18)
                 .frame(maxWidth: 860, alignment: .leading)
+                .environment(\.findHighlight, finding ? findText : "")
                 .frame(maxWidth: .infinity)
                 Color.clear.frame(height: 18).id("end")
             }
@@ -457,6 +477,8 @@ struct SessionView: View {
         let id: UUID
         let items: [ClaudeChat.Item]
         var isTools: Bool { items.first?.role == .tool }
+
+        var timeEntry: TranscriptTimes.Entry { items.first?.timeEntry ?? .init(at: nil, side: .other) }
     }
 
     /// Consecutive tool calls fold into one group.
@@ -476,6 +498,7 @@ struct SessionView: View {
     private func groupView(_ group: Group) -> some View {
         if group.isTools {
             ToolSteps(items: group.items, running: session.chat.isBusy && group.id == groups.last?.id)
+                .help(TranscriptTimes.span(group.items.compactMap(\.at)).map { "Ran at \($0)" } ?? "")
         } else if let item = group.items.first {
             switch item.role {
             case .user:
@@ -879,19 +902,20 @@ struct ToolSteps: View {
 struct UserMessageView: View {
     let text: String
     var minLeading: CGFloat = 80
+    @Environment(\.findHighlight) private var highlight
 
     var body: some View {
         HStack {
             Spacer(minLength: minLeading)
             VStack(alignment: .leading, spacing: 6) {
                 if let m = CrewMessage.split(text) {
-                    Label(m.from, systemImage: "envelope.fill")
+                    Label { Text(AttributedString(m.from).highlighting(highlight)) } icon: { Image(systemName: "envelope.fill") }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                     MarkdownDocument(text: CrewMessage.readable(m.text))
                 } else if Self.isPlain(text) {
-                    Text(text).textSelection(.enabled)
+                    Text(AttributedString(text).highlighting(highlight)).textSelection(.enabled)
                 } else {
                     MarkdownDocument(text: text)
                 }
@@ -938,5 +962,41 @@ extension View {
                 case .ended: NSCursor.arrow.set()
                 }
             }
+    }
+}
+
+/// Where a new day starts in a conversation: "Today", "Yesterday", a weekday or a date, between two thin lines.
+struct DayHeading: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Rectangle().fill(Color.secondary.opacity(0.2)).frame(height: 1)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .fixedSize()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            Rectangle().fill(Color.secondary.opacity(0.2)).frame(height: 1)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The quiet time under a message; hovering shows the full date.
+struct MessageTime: View {
+    let text: String
+    let at: Date
+
+    var body: some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .monospacedDigit()
+            .help(at.formatted(date: .complete, time: .shortened))
     }
 }
