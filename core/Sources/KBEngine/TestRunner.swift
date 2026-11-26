@@ -79,9 +79,25 @@ public final class TestRunner {
         #else
         let sdk = env["ANDROID_HOME"] ?? env["ANDROID_SDK_ROOT"] ?? (NSHomeDirectory() + "/Library/Android/sdk")
         env["ANDROID_HOME"] = sdk
-        env["PATH"] = (env["PATH"] ?? "/usr/bin:/bin") + ":\(sdk)/platform-tools:\(sdk)/emulator:/Applications/Tailscale.app/Contents/MacOS"
+        var path = env["PATH"] ?? "/usr/bin:/bin"
+        if env["JAVA_HOME"] == nil, let jbr = Self.androidStudioJava(), FileManager.default.fileExists(atPath: jbr + "/bin/java") {
+            env["JAVA_HOME"] = jbr
+            path = jbr + "/bin:" + path
+        }
+        env["PATH"] = path + ":\(sdk)/platform-tools:\(sdk)/emulator:/Applications/Tailscale.app/Contents/MacOS"
         #endif
         return env
+    }
+
+    /// The Java that comes with Android Studio, for a machine with no JDK of its own; Gradle builds run fine on it.
+    static func androidStudioJava() -> String? {
+        #if os(Windows)
+        return nil
+        #else
+        ["/Applications/Android Studio.app", NSHomeDirectory() + "/Applications/Android Studio.app"]
+            .map { $0 + "/Contents/jbr/Contents/Home" }
+            .first { FileManager.default.fileExists(atPath: $0) }
+        #endif
     }
 
     // MARK: What this machine has
@@ -206,8 +222,10 @@ public final class TestRunner {
         return TestAdapters.checklist(type: t.type, method: m, context(t))
     }
 
+    /// Whether the target can be delivered now, by its chosen method or else the recommended one. Delivering on its
+    /// own after sessions and at checkpoints still waits until every target has a chosen method (`isSetUp`).
     public func ready(_ t: TestTarget) -> Bool {
-        t.method != nil && ChecklistItem.ready(checklist(t)) && unavailable(t) == nil
+        ChecklistItem.ready(checklist(t)) && unavailable(t) == nil
     }
 
     /// Why this machine can't deliver the target as its method says, or nil when it can.
@@ -719,11 +737,11 @@ public final class TestRunner {
             let why = unavailable(t, method: method)
             return ["id": .string(t.id), "type": .string(t.type.rawValue), "title": .string(t.title), "method": .string(method),
                     "methodTitle": .string(t.adapter.method(method)?.title ?? TestAdapters.preview.title),
-                    "ready": .bool(t.method != nil && ChecklistItem.ready(items) && why == nil),
+                    "ready": .bool(ChecklistItem.ready(items) && why == nil),
                     "unavailable": why.map(JSONValue.string) ?? .null,
                     "checklist": .array(items.map { i in
                         ["id": .string(i.id), "title": .string(i.title), "status": .string(i.status.rawValue),
-                         "help": .string(i.help.joined(separator: "\n"))]
+                         "required": .bool(i.required), "help": .string(i.help.joined(separator: "\n"))]
                     })]
         }
         var compat: JSONValue = .null

@@ -311,7 +311,7 @@ public final class FactoryLoop {
             let cli = engine.cli
             Task {
                 do {
-                    _ = try await cli.run(["tracker", "assign", String(item.id), "--to", "me"])
+                    _ = try await cli.run(["tracker", "assign", String(item.id), "--to", "me", "--project", item.scope])
                     change(id) { $0.run?.log("Assigned #\(item.id) to you.", workItem: item.id) }
                     startTask(id, item)
                 } catch {

@@ -226,12 +226,19 @@ public final class MindmillEngine {
     public var cli: KBCLI {
         KBCLI(pluginRoot: URL(fileURLWithPath: KBConfig.expandTilde(pluginRootPath)), kbRoot: rootURL,
               python: shell?.python3 ?? URL(fileURLWithPath: "/usr/bin/python3"), pythonArguments: shell?.python3Arguments ?? [],
-              environment: shell?.environment ?? ProcessInfo.processInfo.environment)
+              environment: withMe(shell?.environment ?? ProcessInfo.processInfo.environment))
     }
 
     public func claudeEnvironment() -> [String: String] {
-        var env = shell?.environment ?? ProcessInfo.processInfo.environment
+        var env = withMe(shell?.environment ?? ProcessInfo.processInfo.environment)
         env["KB_ROOT"] = rootURL.path
+        return env
+    }
+
+    /// `KB_ME`: who "me" is in Mindmill's own tracker, the same name the app assigns local work items to.
+    private func withMe(_ env: [String: String]) -> [String: String] {
+        var env = env
+        if let me = sprints.workItemNames.first { env["KB_ME"] = me }
         return env
     }
 

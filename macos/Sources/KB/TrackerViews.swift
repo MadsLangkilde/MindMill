@@ -147,9 +147,11 @@ extension AppModel {
         }
     }
 
-    /// Runs a change in Azure DevOps, shows it at once in the backlog, past sprints and search, then refetches.
+    /// Runs a change in the items' tracker, shows it at once in the backlog, past sprints and search, then refetches.
     private func changeWorkItems(_ ids: [Int], _ args: [String], done: String, apply: @escaping (TrackerBacklog) -> TrackerBacklog) {
         busyWorkItems.formUnion(ids)
+        let scopes = Set((tracker?.items ?? []).filter { ids.contains($0.id) }.map(\.scope))
+        let args = args + (scopes.count == 1 ? ["--project", scopes.first!] : [])
         let cli = cli
         Task {
             do {

@@ -363,7 +363,7 @@ The Mac builds and tests what sessions and factories make, and delivers builds a
 
 | Method | Params | Result |
 |---|---|---|
-| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, unavailable?` (why this computer can't deliver it, e.g. an iPhone build on Windows), `checklist[]{id, title, status (ok/missing/unknown), help}`; `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `deliveries[]`; `note?` (none of the scope's repositories is on this computer). A project-wide scope covers its scopes' repositories; the first status of a scope detects its targets |
+| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, unavailable?` (why this computer can't deliver it, e.g. an iPhone build on Windows), `checklist[]{id, title, status (ok/missing/unknown), required, help}` (`ready` is true when every `required` item is ok; the others, like Tailscale for away from home, don't block); `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `deliveries[]` (`id, scope, target, kind, title, state (building/ready/sent/installed/failed), created, platform?, url?, size?, message?`: a `building` one has nothing to install yet, a `failed` one says why in `message`); `note?` (none of the scope's repositories is on this computer). A project-wide scope covers its scopes' repositories; the first status of a scope detects its targets |
 | `test.download` | `delivery` | `name, size, sha256, chunks`; then the file arrives as `file` binary frames |
 | `test.installed` | `delivery`, `ok`, `message?` | `noted` |
 | `test.send` | `delivery` | `sent`, `platform?`: the delivery goes again, as the `test.delivery` event, to the phones of its platform (all phones when it has none), with a push to those not connected. For a desktop client, which shows `apk` and `testflight` deliveries but never installs them: its "Send to phone". A review card's build goes with `review.respond` `install` |
@@ -652,7 +652,7 @@ Mac offers a Plan session that reviews the sprint with Claude's connector instea
 | `test.status` | read | `scope?` | Testing set-up and the latest test delivery for a project. |
 | `test.detect` | write | `scope?` | Look for what can be tested in a project again (apps, web, services); data `targets[]{id, type, title}`. A project-wide scope covers its scopes' repositories. |
 | `test.check` | write | `scope?` | Check this Mac's tools and the project's compatibility for testing again. |
-| `test.deliver` | write | `target`, `scope?`, `session?` (the Build session it comes from) | Build a test target and deliver it: to the phone, a preview, a link. A Build session's "Test" button: the session's `scope`, the targets from `test.status` that are `ready` |
+| `test.deliver` | write | `target`, `scope?`, `session?` (the Build session it comes from) | Build a test target and deliver it: to the phone, a preview, a link. A Build session's "Test" button, and the Test screen's "Build" for a target that is `ready` with no `unavailable`. The answer comes when the build is done, often minutes later: wait up to 45 minutes. Meanwhile `test.status` lists the delivery with `state: building` |
 | `test.server.stop` | destructive | `id` | Stop a running dev server. |
 
 ### Projects

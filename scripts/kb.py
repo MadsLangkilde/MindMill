@@ -4108,8 +4108,67 @@ def tracker_find(root: Path, sid: str, query: str, limit: int = 10) -> dict:
     return {"kind": kind, "items": items[:limit]}
 
 
+LOCAL_TRACKER_ACTIONS = ("item", "state", "task-state", "assign", "move")
+
+
+def tracker_local_scope(root: Path, a) -> str | None:
+    """The scope a `kb tracker` command acts on when that scope keeps its work in Mindmill's own tracker."""
+    if a.action not in LOCAL_TRACKER_ACTIONS:
+        return None
+    sid = getattr(a, "project", None) or (resolve_project(load_registry(root), Path(os.getcwd())) or {}).get("id")
+    if not sid or (load_settings(root, sid).get("tracker") or {}).get("kind") != "local":
+        return None
+    return sid
+
+
+def local_assignee(who: str) -> str:
+    """Who an item in Mindmill's own tracker goes to: `me` is the name set in Mindmill's settings (`KB_ME`)."""
+    who = who.strip()
+    if who.lower() in ("none", "nobody", ""):
+        return ""
+    if who.lower() == "me":
+        me = os.environ.get("KB_ME", "").strip()
+        if not me:
+            raise WorkError("Mindmill's own tracker needs your name to assign to you: set it in Mindmill's settings "
+                            "(Your name), or pass --to <name>")
+        return me
+    return who
+
+
+def tracker_local(root: Path, sid: str, a) -> int:
+    """`kb tracker item/state/task-state/assign/move` for a scope that uses Mindmill's own tracker."""
+    if a.action == "item":
+        return work_action(root, sid, argparse.Namespace(action="show", id=a.id, json=a.json))
+    data = load_work(root, sid)
+    lines = []
+    for iid in a.ids:
+        if a.action in ("state", "task-state"):
+            item = update_work_item(data, iid, {"state": a.state})
+            lines.append(f"#{item['id']} set to {item['state']}")
+        elif a.action == "assign":
+            item = update_work_item(data, iid, {"assignee": local_assignee(a.to)})
+            lines.append(f"#{item['id']} assigned to {item.get('assignee') or 'nobody'}")
+        else:
+            which = "none" if a.backlog else a.sprint
+            if which.lower() == "next":
+                today = dt.date.today().isoformat()
+                which = next((s["name"] for s in sorted(data["sprints"], key=lambda s: s["start"]) if s["start"] > today), "")
+                if not which:
+                    raise WorkError("there is no sprint after the current one; see `kb work sprint list`")
+            item = update_work_item(data, iid, {"sprint": which})
+            lines.append(f"#{item['id']} moved to {item.get('sprint') or 'the backlog'}")
+    save_work(root, sid, data)
+    print("\n".join(lines))
+    return 0
+
+
 def cmd_tracker(a) -> int:
     root = kb_root()
+    if sid := tracker_local_scope(root, a):
+        try:
+            return tracker_local(root, sid, a)
+        except WorkError as e:
+            sys.exit(f"kb: {e}")
     if a.action == "find":
         sid = a.project or current_project_id(root)
         try:
@@ -4660,6 +4719,7 @@ def local_backlog(data: dict, sid: str, done_days: int = 14, sprint: str | None 
             return i.get("sprint", "") == sprint and i["state"] != "Removed"
         return i["state"] not in ("Done", "Removed") or (i["state"] == "Done" and i.get("changed", "")[:10] >= since)
 
+    me = os.environ.get("KB_ME", "").strip()
     rows = []
     for _, i in work_tree(data["items"]):
         if i["type"] not in ("pbi", "bug") or not picked(i):
@@ -4671,7 +4731,7 @@ def local_backlog(data: dict, sid: str, done_days: int = 14, sprint: str | None 
             "id": i["id"], "type": i["type"], "title": i["title"], "state": i["state"],
             "stage": "done" if i["state"] == "Done" else LOCAL_STAGE.get(i["state"], "in_progress"),
             "scope": sid, "scopes": [sid], "tags": list(i.get("tags") or []), "assignee": i.get("assignee", ""),
-            "mine": False, "sprint": i.get("sprint", ""), "changed": i.get("changed", ""), "url": "", "prs": [],
+            "mine": bool(me) and (i.get("assignee") or "").strip().lower() == me.lower(), "sprint": i.get("sprint", ""), "changed": i.get("changed", ""), "url": "", "prs": [],
             "tasks": tasks, "tasks_done": sum(1 for t in tasks if task_is_done(t["state"])), "tasks_total": len(tasks),
         })
     return rows
@@ -4743,7 +4803,8 @@ def work_action(root: Path, sid: str, a) -> int:
         if [a.description, a.acceptance, a.repro].count("-") > 1:
             raise WorkError("only one of --description, --acceptance and --repro can read stdin")
         fields = {"description": read_text_arg(a.description), "acceptance": read_text_arg(a.acceptance),
-                  "repro": read_text_arg(a.repro), "assignee": a.assignee, "tags": a.tags, "effort": a.effort}
+                  "repro": read_text_arg(a.repro), "tags": a.tags, "effort": a.effort,
+                  "assignee": local_assignee(a.assignee) if (a.assignee or "").strip().lower() == "me" else a.assignee}
         if a.action == "add":
             item = add_work_item(data, a.type, a.title, parent=a.parent, sprint=a.sprint, state=a.state, **fields)
             save_work(root, sid, data)
@@ -5433,7 +5494,8 @@ def backlog_create_local(root: Path, e: Entry, a) -> int:
     ac = body_section(e.body, "Acceptance criteria")
     assignee = str(e.get("assignee") or "")
     fields = {"description": desc, "acceptance": ac, "tags": normalize_tags(e.get("tags") or []),
-              "assignee": "" if assignee.lower() in ("none", "me") else assignee}
+              "assignee": "" if assignee.lower() == "none" else
+              os.environ.get("KB_ME", "").strip() if assignee.lower() == "me" else assignee}
     if not a.yes:
         print(json.dumps({"tracker": "local", "type": kind, "title": e.title, "parent": parent, "related": related,
                           "sprint": sprint, **({"parent_from": parent_note} if parent_note else {}),
@@ -7967,9 +8029,11 @@ def main(argv: list[str]) -> int:
     trt = trs.add_parser("task-state", help="move tasks to a state, e.g. Done, In Progress or To Do")
     trt.add_argument("ids", nargs="+")
     trt.add_argument("--state", required=True)
+    trt.add_argument("--project", "--scope", dest="project", help="the scope whose tracker holds them")
     trst = trs.add_parser("state", help="move PBIs, bugs or tasks to a state, e.g. Done or Removed")
     trst.add_argument("ids", nargs="+")
     trst.add_argument("--state", required=True)
+    trst.add_argument("--project", "--scope", dest="project", help="the scope whose tracker holds them")
     trtg = trs.add_parser("tag", help="add the item's aligned KB tags (item-tags.json) to its tracker tags; only after the user confirmed")
     trtg.add_argument("id")
     trtg.add_argument("--yes", action="store_true")
@@ -7983,6 +8047,7 @@ def main(argv: list[str]) -> int:
     tras = trs.add_parser("assign", help="assign PBIs, bugs or tasks to someone (me for yourself)")
     tras.add_argument("ids", nargs="+")
     tras.add_argument("--to", required=True, help="me, a name from the people directory, or an email")
+    tras.add_argument("--project", "--scope", dest="project", help="the scope whose tracker holds them")
     trmv = trs.add_parser("move", help="move PBIs or bugs to a sprint, or out of every sprint to the backlog")
     trmv.add_argument("ids", nargs="+")
     where = trmv.add_mutually_exclusive_group(required=True)

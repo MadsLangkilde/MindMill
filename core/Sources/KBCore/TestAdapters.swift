@@ -269,7 +269,7 @@ public struct AndroidTestAdapter: TestAdapter {
             Checks.confirm(c, "install-allowed", "Mindmill on the phone may install apps", help: [
                 "On the phone: Settings → Apps → Mindmill → Install unknown apps → Allow from this source.",
                 "Mindmill asks for this the first time it installs a build; this ticks itself after the first install.",
-            ]),
+            ], required: false),
             Checks.tailscale(c, required: false),
         ]
     }

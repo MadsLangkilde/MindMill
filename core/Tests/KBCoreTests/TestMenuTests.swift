@@ -114,11 +114,11 @@ struct ChecklistTests {
 
         f.companionPaired = true
         items = TestAdapters.checklist(type: .android, method: "companion", context(f))
-        #expect(!ChecklistItem.ready(items), "an unticked confirmation isn't a pass")
+        #expect(items.first { $0.id == "tailscale" }?.status == .missing)
+        #expect(ChecklistItem.ready(items), "the phone asks to install apps at the first build, and Tailscale is optional")
 
         items = TestAdapters.checklist(type: .android, method: "companion", context(f, confirmed: ["install-allowed"]))
-        #expect(items.first { $0.id == "tailscale" }?.status == .missing)
-        #expect(ChecklistItem.ready(items), "Tailscale is optional")
+        #expect(items.first { $0.id == "install-allowed" }?.status == .ok)
     }
 
     @Test func missingToolBlocks() {

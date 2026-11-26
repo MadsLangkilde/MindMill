@@ -47,28 +47,28 @@ extension AppModel {
 
         a.register("workitem.get") { [unowned self] p in
             guard let id = Self.intParam(p["id"]) else { throw ActionError("Which work item?") }
-            let out = try await cli.run(["tracker", "item", String(id)])
+            let out = try await cli.run(["tracker", "item", String(id)] + engine.workItemScopeArgs(id, p))
             let item = tracker?.items.first { $0.id == id }
             return ActionResult(item.map { "\($0.id): \($0.title), \($0.state), assigned to \($0.assignee.isEmpty ? "nobody" : $0.assignee)." } ?? "Work item \(id).",
                                 data: ["id": .number(Double(id)), "text": .string(String(out.prefix(12000)))])
         }
 
         a.register("workitem.update") { [unowned self] p in
-            guard let id = Self.intParam(p["id"]).map(String.init) else { throw ActionError("Which work item?") }
+            guard let n = Self.intParam(p["id"]) else { throw ActionError("Which work item?") }
+            let id = String(n), at = engine.workItemScopeArgs(n, p)
             var said: [String] = []
             if let state = p["state"]?.string, !state.isEmpty {
-                _ = try await cli.run(["tracker", "state", "--state", state, id]); said.append("set to \(state)")
+                _ = try await cli.run(["tracker", "state", "--state", state, id] + at); said.append("set to \(state)")
             }
             if let who = p["assignee"]?.string, !who.isEmpty {
-                _ = try await cli.run(["tracker", "assign", "--to", who, id]); said.append("assigned to \(who)")
+                _ = try await cli.run(["tracker", "assign", "--to", who, id] + at); said.append("assigned to \(who)")
             }
             if let sprint = p["sprint"]?.string, !sprint.isEmpty {
-                var args = ["tracker", "move", "--sprint", sprint, id]
-                if let scope = p["scope"]?.string { args += ["--project", scope] }
-                _ = try await cli.run(args); said.append("moved to \(sprint)")
+                _ = try await cli.run(["tracker", "move", "--sprint", sprint, id] + at); said.append("moved to \(sprint)")
             }
             if let comment = p["comment"]?.string, !comment.isEmpty {
-                _ = try await cli.run(["tracker", "note", id, "--text", comment, "--comment"]); said.append("commented")
+                _ = try await cli.run(TrackerNote.args(id, comment, scopeArgs: at, local: at.last.map(trackerKind) == "local"))
+                said.append("commented")
             }
             refreshTracker(force: true)
             return ActionResult(said.isEmpty ? "Nothing to change." : "Work item \(id) " + Self.list(said) + ".")

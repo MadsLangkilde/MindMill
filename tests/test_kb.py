@@ -1272,6 +1272,29 @@ class WorkTrackerTest(KbTestCase):
         self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}))
         self.assertIn("kb work", self.cli("tracker", "features").stderr)
 
+    def test_tracker_item_commands_act_on_the_local_tracker(self):
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}), "--project", "app-b")
+        self.assertEqual(self.cli("work", "add", "pbi", "Offline mode", "--scope", "app-b").stdout.strip(), "created 1")
+
+        def kb(*args, me="Alex"):
+            env = {**self.no_ado(), **({"KB_ME": me} if me else {})}
+            return subprocess.run([sys.executable, str(PLUGIN / "scripts" / "kb.py"), "tracker", *args, "--project", "app-b"],
+                                  cwd=self.tmp, env=env, capture_output=True, text=True)
+
+        for args in (("state", "1", "--state", "Committed"), ("assign", "1", "--to", "me"), ("move", "1", "--backlog")):
+            r = kb(*args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        item = json.loads(kb("item", "1", "--json").stdout)
+        self.assertEqual((item["state"], item["assignee"], item["sprint"]), ("Committed", "Alex", ""))
+        mine = json.loads(subprocess.run([sys.executable, str(PLUGIN / "scripts" / "kb.py"), "tracker", "backlog", "--json"],
+                                         cwd=self.tmp, env={**self.no_ado(), "KB_ME": "alex"}, capture_output=True, text=True).stdout)
+        self.assertEqual([(i["id"], i["mine"]) for i in mine["items"]], [(1, True)])
+
+        r = kb("assign", "1", "--to", "me", me=None)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("needs your name", r.stderr)
+        self.assertIn("isn't a pbi state", kb("state", "1", "--state", "Active").stderr)
+
 
 
 class SprintTest(KbTestCase):
