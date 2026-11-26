@@ -100,6 +100,8 @@ public struct SessionRecord: Codable, Identifiable, Equatable, Sendable {
 
     /// A research's session: kept as long as the research is, whatever its age.
     public var isResearch: Bool { about?.hasPrefix("research:") == true }
+    /// Research and notes keep their session as long as they exist.
+    public var keptWithItsEntry: Bool { isResearch || about?.hasPrefix("note:") == true }
 
     /// `about` of the general assistant: a Plan session that can do anything in Mindmill through its actions.
     public static let assistantAbout = "assistant"
@@ -134,8 +136,8 @@ public enum SessionStore {
 
     public static func save(_ records: [SessionRecord], to url: URL, now: Date = Date()) throws {
         let cutoff = now.addingTimeInterval(-Double(keepDays) * 86_400)
-        let research = records.filter { $0.isResearch && !$0.messages.isEmpty }
-        let rest = records.filter { !$0.isResearch && ($0.updated >= cutoff || $0.role == .overseer) && (!$0.messages.isEmpty || $0.role == .overseer) }
+        let research = records.filter { $0.keptWithItsEntry && !$0.messages.isEmpty }
+        let rest = records.filter { !$0.keptWithItsEntry && ($0.updated >= cutoff || $0.role == .overseer) && (!$0.messages.isEmpty || $0.role == .overseer) }
             .sorted { $0.updated > $1.updated }
             .prefix(maxSessions)
         let kept = (research + rest).sorted { $0.updated > $1.updated }

@@ -353,13 +353,21 @@ private struct ProviderKeyRow: View {
                         VoiceKeychain().set(entry.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider.id)
                         entry = ""
                         saved = true
+                        if provider.available, prefs.provider == nil || prefs.engine == .keyless {
+                            prefs.provider = provider.id
+                            prefs.engine = .api
+                        }
                         test()
                     }
                     .disabled(entry.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 Link("Get a key", destination: URL(string: provider.keyPage)!).font(.caption)
             }
-            if let result { Text(result).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            if let result {
+                Label(result, systemImage: RealtimeKeyTest.passed(result) ? "checkmark.circle.fill" : "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(RealtimeKeyTest.passed(result) ? Color.green : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.vertical, 4)
         .onAppear { saved = VoiceKeychain.has(provider: provider.id) }

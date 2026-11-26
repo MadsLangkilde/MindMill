@@ -131,7 +131,7 @@ public final class SessionHub {
         return ScopeRepositories.of(scope, in: engine.index).workingDirectory ?? root
     }
 
-    /// Opens a new session. With `message`, it starts at once (for example `/kb:create-pbi <id>`).
+    /// Opens a new session. With `message`, it starts at once (for example `/mindmill:create-pbi <id>`).
     @discardableResult
     public func newSession(title: String? = nil, project: String? = nil, subject: AskSubject? = nil,
                            message: String? = nil, display: String? = nil, role: SessionRole = .solo, parentID: String? = nil,
@@ -308,6 +308,7 @@ public final class SessionHub {
 
     /// Tells the phones and desktop shells a session changed, so they fetch what's new with `session.get` and `since`.
     func remoteChanged(_ s: WorkSession) {
+        engine.sessionVoiceChanged(s)
         let remote = engine.remote
         if remote.isRunning { remote.sessionStateChanged(id: s.id, title: s.title, state: s.crewState.rawValue) }
         if !remote.connected.isEmpty || !remote.desktops.isEmpty {

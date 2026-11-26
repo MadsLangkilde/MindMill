@@ -173,8 +173,8 @@ heading it sits under: `Planning`, `Work`, `Sessions`; none for the rows at the 
 as the row's badge: open items, or sessions), `needsYou?` (how many wait for the user; show it prominently).
 
 Plan's sections, in order: `today`, `reminders`, `goals` (across scopes), then for the scope `project`, `sessions`,
-`overview` (only when the scope has one), the Planning rows in the user's order (`inbox`, `decisions`, `meetings`,
-`discussions`, `ideas`, `research`, `facts`, `followups`, `references` by default), then the Work rows in the user's
+`overview` (only when the scope has one), the Planning rows in the user's order (`notes`, `inbox`, `decisions`,
+`meetings`, `discussions`, `ideas`, `research`, `facts`, `followups`, `references` by default), then the Work rows in the user's
 order (`backlog`, `pullRequests`, `architecture` by default). A section id that is a KB section (`research`,
 `followups`…) lists with `entries.list` `section`; `sessions` with `sessions.list` `scope`; `pullRequests` with the
 `prs.list` action; `today`, `reminders`, `goals` with the `today.plan`, `reminders.list`, `goals.list` actions;
@@ -328,6 +328,49 @@ A value of the wrong type fails with `bad_params` and a message naming the key (
 apply: grey it out. Start, pause, resume and stop with the `factory.*` actions; `factories.status` lists them, and
 `factory.changed` tells when one changed.
 
+### Notes, suggestions and sharing
+
+Plan has a **Notes** section (`notes`, a KB section like the others: `entries.list`, `entry.get`, `entry.new`): the
+user's notes that don't fit anywhere else yet. Notes are private by default. `fields.status` is `open` or `filed`
+(everything in it has gone where it belongs).
+
+Sessions, notes and reviews **suggest** what should go into the knowledge base (a fact, a decision, an idea, a
+follow-up, a reference, an architecture note, a backlog item, a note): each suggestion is an inbox entry waiting for
+the user. Show them where they came from, each with **Add** (`inbox.approve`) and **Dismiss** (`inbox.reject`):
+
+- `session.get` has `suggestions[]` for the session: `{id, section, title, summary, reason}` (`section` is where it
+  goes when added).
+- `entry.get` has `suggestions[]` in the same shape for a note (and an idea or research), proposed from it.
+
+Every entry can be **private** (only in the knowledge base on the Mac) or **shared** (a copy in the project's
+repository, part of its next commit and pull request). Making a shared entry private removes the repository's copy.
+
+| Method | Params | Result |
+|---|---|---|
+| `entry.get` | `id` | as above, plus `sharing{state, title, shared, canChange, repo?}` (`state`: private/noRepository/uncommitted/unpushed/pushed/local/missing; `title` says it in words; `canChange` is false for inbox entries and in scopes without a repository) and `suggestions[]` |
+| `entry.share` | `id`, `shared` (boolean) | `sharing` (as in `entry.get`) |
+| `sharing.defaults` | `scope?` | `scope`, `repo?` (none: everything stays private), `defaults[]`: `{section, title, visibility}` (`visibility`: private/shared), for each kind of entry |
+| `sharing.setDefault` | `scope?`, `section`, `visibility` (private/shared), `applyExisting?` (true also changes the entries already there) | `changed` (how many existing entries changed) |
+
+### Skills, plugins and tools
+
+What the session's AI (`hello.brain`) can use, managed from the phone as on the Mac. With a brain that has no
+plugins (Codex), the plugin methods fail with `unavailable`.
+
+| Method | Params | Result |
+|---|---|---|
+| `skills.list` | `session?`, `scope?` | `skills[]`: `{name, command, description, source, plugin?, location?, scope?, editable}`. `command` is what to type (`/mindmill:idea`), `source` is plugin/user/project/command; `location` (user: for every project, project: only in the scope's repository) and `scope` are set for the user's own skills, which are `editable`. Typing `/` in a session's composer lists these, filtered by what follows the slash, in a scrollable list over the keyboard; picking one puts `command` and a space in the composer |
+| `skill.get` | `name`, `location`, `scope?` | `name`, `description`, `content` (the whole SKILL.md) |
+| `skill.save` | `name`, `location`, `scope?` (for project), `content` | `saved`; a new name creates the skill |
+| `skill.draft` | `description` (what it should do, in the user's words), `name?`, `location`, `scope?`, `content?` (the current text, when changing one) | `name`, `content`: the AI writes the SKILL.md (or changes `content` as described); not saved until `skill.save` |
+| `skill.delete` | `name`, `location`, `scope?` | `deleted` |
+| `plugins.list` | `available?` (true adds what the marketplaces offer), `query?` (filters those by name and description) | `plugins[]`: `{id, name, marketplace, version, scope, enabled, description?}`, `available[]`: `{id, name, marketplace, description?, installs?}`, at most 50, the most installed first (marketplaces offer thousands: let the user search) |
+| `plugin.set` | `id`, `enabled` | `done` |
+| `plugin.install` / `plugin.uninstall` | `id` | `done` (new plugins work in sessions started after it) |
+| `mcp.list` | | `servers[]`: `{name, target, status (connected/needsAuth/failed/unknown), origin (user/claude.ai/plugin), removable}`, `connectorsURL?` (where the AI's account manages connectors; open it in the browser) |
+| `mcp.add` | `name`, `url`, `transport?` (http/sse) | `done` |
+| `mcp.remove` | `name` | `done` |
+
 ### Voice
 
 The phone never sees or stores an API key. It asks the Mac which engine to use:
@@ -341,10 +384,11 @@ The phone never sees or stores an API key. It asks the Mac which engine to use:
 | Method | Params | Result |
 |---|---|---|
 | `voice.config` | | `engine` (`keyless`/`api`), `provider?`, `providerName?`, `model?`, `rate` (speech speed, 0.5–2), `voice?` (a voice name hint), `confirmsRisky`, `language` (`auto`/`da-DK`/`en-US`) |
-| `voice.start` | `scope?`, `engine?` (`keyless` forces keyless) | `conversation`, `engine` |
+| `voice.start` | `scope?`, `engine?` (`keyless` forces keyless), `session?` | `conversation`, `engine`, `session?`. With `session`: live voice in that work session through the voice API (only when `voice.config` says `api`; otherwise it fails with `unavailable` and the phone talks live on its own). The voice model hands what the user says to the session and says its progress and answer as they come; the session's messages arrive as usual with `session.changed`. Stream audio and play it as for the API engine; on `voice.fallback`, end it and carry on with on-phone live chat |
 | `voice.say` | `conversation`, `text` | `turn` |
 | `voice.interrupt` | `conversation` | `stopped`: the user started talking; the Mac stops the turn and the phone stops speaking |
 | `voice.end` | `conversation` | `ended` |
+| `voice.test` | | `ok` (boolean), `message` (for the user), `providerName?`: checks the voice API key the Mac holds |
 
 | Event | Data | What to do |
 |---|---|---|
@@ -352,7 +396,7 @@ The phone never sees or stores an API key. It asks the Mac which engine to use:
 | `voice.done` | `conversation, turn, text` | The whole reply; listen again once speaking ends |
 | `voice.action` | `conversation, name, status, speech, data?` | Show a card for what was done |
 | `voice.error` | `conversation, message` | Say it briefly and listen again |
-| `voice.transcript` | `conversation, role (user/assistant), text, final` | API engine: show the text |
+| `voice.transcript` | `conversation, role (user/assistant), text, final` | API engine: show the text. `text` is everything so far in that turn (a non-final one replaces the last), and the user's turn ends with a final one |
 | `voice.state` | `conversation, state (listening/thinking/speaking)` | API engine: show the state |
 | `voice.clear` | `conversation` | API engine: the user barged in; drop queued audio now |
 | `voice.fallback` | `conversation, reason, speech` | Speak `speech`, then carry on keyless in the same conversation |
@@ -363,7 +407,7 @@ The Mac builds and tests what sessions and factories make, and delivers builds a
 
 | Method | Params | Result |
 |---|---|---|
-| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, unavailable?` (why this computer can't deliver it, e.g. an iPhone build on Windows), `checklist[]{id, title, status (ok/missing/unknown), required, help}` (`ready` is true when every `required` item is ok; the others, like Tailscale for away from home, don't block); `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `deliveries[]` (`id, scope, target, kind, title, state (building/ready/sent/installed/failed), created, platform?, url?, size?, message?`: a `building` one has nothing to install yet, a `failed` one says why in `message`); `note?` (none of the scope's repositories is on this computer). A project-wide scope covers its scopes' repositories; the first status of a scope detects its targets |
+| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, unavailable?` (why this computer can't deliver it, e.g. an iPhone build on Windows), `checklist[]{id, title, status (ok/missing/unknown), required, help}` (`ready` is true when every `required` item is ok; the others, like Tailscale for away from home, don't block); `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `checking` (true while the computer's tools are still being looked at, right after it starts: what depends on them is `unknown`, not `missing`, nothing is `ready` yet; ask again in a few seconds); a phone gets only the targets it can try itself (Android: Android apps and websites; iPhone: iOS apps and websites), each with `kind` (apk/url/preview…: how it reaches the phone); `deliveries[]` (`id, scope, target, kind, title, state (building/ready/sent/installed/failed), created, platform?, url?, size?, message?`: a `building` one has nothing to install yet, a `failed` one says why in `message`); `note?` (none of the scope's repositories is on this computer). A project-wide scope covers its scopes' repositories; the first status of a scope detects its targets |
 | `test.download` | `delivery` | `name, size, sha256, chunks`; then the file arrives as `file` binary frames |
 | `test.installed` | `delivery`, `ok`, `message?` | `noted` |
 | `test.send` | `delivery` | `sent`, `platform?`: the delivery goes again, as the `test.delivery` event, to the phones of its platform (all phones when it has none), with a push to those not connected. For a desktop client, which shows `apk` and `testflight` deliveries but never installs them: its "Send to phone". A review card's build goes with `review.respond` `install` |
@@ -412,6 +456,8 @@ answers `push.register` with `registered: false` and a `message`; the phone carr
 | `projects.changed` | | Projects, locations or scopes changed: `hello` again for `scopes[]`, and refresh an open project editor with `projects.config.get` |
 | `factory.changed` | `id, status` | Refresh factory status (`action.run` `factories.status`) |
 | `meeting.changed` | `meeting, state` | If that meeting is open, `meeting.get` |
+| `voice.changed` | as `voice.config` | The voice settings or key changed on the Mac: use these from now on, and show which engine (`providerName`, or on the phone) the next conversation uses |
+| `skills.changed` | | Skills, plugins or tools changed: refresh those lists |
 
 ## Action areas
 
@@ -492,6 +538,10 @@ described after the tables.
 | `idea.status` | write | `id`, `status` (new/exploring/shelved/done) | Set an idea's status. |
 | `idea.turn` | write | `id`, `into` (backlog/fact/decision/followup/architecture/project) | Turn an idea into a backlog item, fact, decision, follow-up, architecture note or project. |
 | `idea.brainstorm` | write | `id` | Brainstorm on an idea in a session. |
+| `note.add` | write | `text`, `title?`, `scope?` | Write a note down. |
+| `note.discuss` | write | `id`, `spoken?` (boolean: the user talks out loud) | Talk a note through in its session: it summarises, asks the user to confirm and suggests where things belong. Returns `session`. |
+| `note.sort` | write | `id` | Suggest where each part of a note belongs (facts, decisions, ideas, follow-ups…). Returns `session`. |
+| `note.status` | write | `id`, `status` (open/filed) | Set a note's status. |
 | `research.start` | write | `question`, `title?`, `work_item?` (integer), `entry?`, `scope?` | Start researching a question. |
 | `research.continue` | write | `id` | Carry on with a research. |
 | `research.finish` | write | `id` | Summarise a research so its takeaways can be filed. |

@@ -108,6 +108,7 @@ public enum KBStore {
         }
         if section == .ideas { fm.set("status", .string(IdeaStatus.new.rawValue)) }
         if section == .research { fm.set("status", .string(ResearchStatus.open.rawValue)) }
+        if section == .notes { fm.set("status", .string(NoteStatus.open.rawValue)) }
         if section == .discussions {
             fm.set("status", .string("open"))
             fm.set("waiting_on", .string("nobody"))
@@ -144,6 +145,8 @@ public enum KBStore {
             return "\n## The idea\n\n\n## Brainstorm\n\n\n## Open questions\n\n\n## Next steps\n\n\n## Turned into\n\n"
         case .research:
             return "\n" + ResearchBody.template(question: "")
+        case .notes:
+            return "\n" + NoteBody.template(text: "")
         case .facts, .architecture, .overview, .followups, .inbox:
             return "\n"
         }

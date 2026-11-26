@@ -36,6 +36,8 @@ public struct ProjectSettings: Equatable, Sendable {
     public var sources: [KnowledgeSource] = []
     /// Whether the file had a `tracker` object; a project without one is not set up yet.
     public var hasTracker = false
+    /// Each kind of entry's visibility when made (`private`/`shared`), where the user chose one.
+    public var sharing: [String: String] = [:]
     var raw: [String: AnyHashableSendable] = [:]
 
     public init() {}
@@ -71,6 +73,7 @@ public struct ProjectSettings: Equatable, Sendable {
             s.tracker.foundIn = t["found_in"] as? String ?? ""
         }
         s.sources = SourceList.parse(json["sources"])
+        s.sharing = (json["sharing"] as? [String: String]) ?? [:]
         if let c = json["conventions"] as? [String: Any] {
             s.conventions = c.keys.sorted().map { Convention(key: $0, value: (c[$0] as? String) ?? "\(c[$0] ?? "")") }
         }
@@ -106,6 +109,7 @@ public struct ProjectSettings: Equatable, Sendable {
         }
         json["conventions"] = c
         if !sources.isEmpty || json["sources"] != nil { json["sources"] = sources.map(\.json) }
+        if !sharing.isEmpty || json["sharing"] != nil { json["sharing"] = sharing }
         let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         return data + Data("\n".utf8)
     }
@@ -121,6 +125,7 @@ public struct ProjectSettings: Equatable, Sendable {
             json["conventions"] = c
         }
         if !sources.isEmpty || json["sources"] != nil { json["sources"] = sources.map(\.json) }
+        if !sharing.isEmpty || json["sharing"] != nil { json["sharing"] = sharing }
         let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         return data + Data("\n".utf8)
     }
@@ -132,7 +137,7 @@ public struct ProjectSettings: Equatable, Sendable {
     }
 
     public static func == (a: ProjectSettings, b: ProjectSettings) -> Bool {
-        a.tracker == b.tracker && a.conventions == b.conventions && a.hasTracker == b.hasTracker && a.sources == b.sources
+        a.tracker == b.tracker && a.conventions == b.conventions && a.hasTracker == b.hasTracker && a.sources == b.sources && a.sharing == b.sharing
     }
 }
 

@@ -135,18 +135,8 @@ public final class TestRunner {
         if FileManager.default.fileExists(atPath: platforms) {
             tools["android-sdk"] = ((try? FileManager.default.contentsOfDirectory(atPath: platforms)) ?? []).sorted().last ?? "installed"
         }
-        let probes: [(String, String)] = [
-            ("swift", "swift --version"), ("java", "java -version"), ("gradle", "command -v gradle"), ("node", "node --version"),
-            ("npm", "npm --version"), ("pnpm", "pnpm --version"), ("python3", "python3 --version"), ("go", "go version"),
-            ("cargo", "cargo --version"), ("dotnet", "dotnet --version"), ("docker", "docker --version"),
-            ("platformio", "pio --version"), ("idf.py", "command -v idf.py"), ("west", "west --version"), ("adb", "adb version"),
-            ("arm-none-eabi-gcc", "arm-none-eabi-gcc --version"), ("cmake", "cmake --version"), ("tailscale", "tailscale version"),
-            ("flutter", "flutter --version --machine 2>/dev/null | head -c 200"), ("msbuild", "command -v msbuild"),
-        ]
-        for (name, cmd) in probes {
-            if let x = await sh(cmd + " 2>&1", timeout: 10) {
-                tools[name] = ["gradle", "idf.py", "msbuild"].contains(name) ? "installed" : first(x)
-            }
+        for (name, line) in await TestShell.probe(Self.toolProbes + [("msbuild", "command -v msbuild")], environment: env) {
+            tools[name] = ["gradle", "idf.py", "msbuild"].contains(name) ? "installed" : line
         }
         f.toolchains = tools
         if tools["adb"] != nil, let x = await sh("adb devices -l") { f.devices = Self.androidDevices(x) }
@@ -155,6 +145,16 @@ public final class TestRunner {
         if f.lanIP == nil { f.lanIP = await engine.platform.transport.addresses().addresses.first(where: RemoteAddresses.isPrivateLAN) }
         return f
     }
+
+    /// The toolchains every platform looks for, as (name, command); `TestShell.probe` runs them at once.
+    public static let toolProbes: [(String, String)] = [
+        ("swift", "swift --version"), ("java", "java -version"), ("gradle", "command -v gradle"), ("node", "node --version"),
+        ("npm", "npm --version"), ("pnpm", "pnpm --version"), ("python3", "python3 --version"), ("go", "go version"),
+        ("cargo", "cargo --version"), ("dotnet", "dotnet --version"), ("docker", "docker --version"),
+        ("platformio", "pio --version"), ("idf.py", "command -v idf.py"), ("west", "west --version"), ("adb", "adb version"),
+        ("arm-none-eabi-gcc", "arm-none-eabi-gcc --version"), ("cmake", "cmake --version"), ("tailscale", "tailscale version"),
+        ("flutter", "flutter --version --machine 2>/dev/null | head -c 200"),
+    ]
 
     /// `adb devices -l`'s phones and emulators.
     public static func androidDevices(_ output: String) -> [TestEnvironmentFacts.Device] {
@@ -727,17 +727,27 @@ public final class TestRunner {
         ScopeRepositories.of(scope, in: engine.index).work.compactMap(\.checkout)
     }
 
-    public func statusJSON(scope: String) -> JSONValue {
+    /// Answers at once: when this computer's tools haven't been looked at yet, that starts in the background and
+    /// `checking` is true, with what depends on them unknown rather than missing. A phone ([platform]) gets only the
+    /// targets it can try itself.
+    public func statusJSON(scope: String, platform: String? = nil) -> JSONValue {
         detectIfNeverDone(scope)
+        let checking = center.facts.gathered == nil
+        if checking, engine.shell != nil { Task { [weak self] in await self?.gatherFacts() } }
         let plan = center.store[scope]
         let facts = currentFacts
-        let targets: [JSONValue] = plan.targets.map { t in
+        let targets: [JSONValue] = plan.targets.filter { $0.type.testable(on: platform) }.map { t in
             let method = t.method ?? t.adapter.recommended(facts)
-            let items = checklist(t, method: method)
+            let items = checklist(t, method: method).map { i in
+                var i = i
+                if checking && i.status == .missing { i.status = .unknown }
+                return i
+            }
             let why = unavailable(t, method: method)
             return ["id": .string(t.id), "type": .string(t.type.rawValue), "title": .string(t.title), "method": .string(method),
                     "methodTitle": .string(t.adapter.method(method)?.title ?? TestAdapters.preview.title),
-                    "ready": .bool(ChecklistItem.ready(items) && why == nil),
+                    "kind": .string((t.adapter.method(method) ?? TestAdapters.preview).kind.rawValue),
+                    "ready": .bool(!checking && ChecklistItem.ready(items) && why == nil),
                     "unavailable": why.map(JSONValue.string) ?? .null,
                     "checklist": .array(items.map { i in
                         ["id": .string(i.id), "title": .string(i.title), "status": .string(i.status.rawValue),
@@ -753,7 +763,7 @@ public final class TestRunner {
         let note: JSONValue = checkouts(scope).isEmpty
             ? .string("None of \(engine.index.project(scope)?.title ?? scope)'s repositories is on this \(engine.platform.machineWord): add its folder in the project's settings.")
             : .null
-        return ["targets": .array(targets), "compatibility": compat, "note": note,
+        return ["targets": .array(targets), "compatibility": compat, "note": note, "checking": .bool(checking),
                 "deliveries": .array(center.deliveries.filter { $0.scope == scope && $0.phoneKind != nil }.prefix(15).map(\.summary))]
     }
 
@@ -820,7 +830,7 @@ public final class TestRunner {
         switch method {
         case "test.status":
             guard let scope = p["scope"]?.string ?? engine.scope else { throw RemoteError.badParams("scope") }
-            return statusJSON(scope: scope)
+            return statusJSON(scope: scope, platform: client.platform)
 
         case "test.download":
             guard let id = p["delivery"]?.string, let d = center.deliveries.first(where: { $0.id == id }), d.kind == .apk, let name = d.file,

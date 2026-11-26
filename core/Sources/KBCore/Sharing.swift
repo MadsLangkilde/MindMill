@@ -101,8 +101,12 @@ public struct SharingStatus: Equatable, Sendable {
         return repos[id.project]?.path == nil ? .noRepository : .private
     }
 
-    /// Which entry kinds are shared by default when they're made: the team's knowledge, never meetings or notes.
-    public static func sharedByDefault(_ section: KBSection) -> Bool { KBLayout.teamSections.contains(section) }
+    /// Whether a kind of entry is shared when it's made: the scope's choice (`chosen`, settings.json `sharing`), else
+    /// the team's knowledge is and meetings, notes and the rest aren't.
+    public static func sharedByDefault(_ section: KBSection, chosen: [String: String] = [:]) -> Bool {
+        if let v = chosen[section.rawValue], v == "shared" || v == "private" { return v == "shared" }
+        return KBLayout.teamSections.contains(section)
+    }
 }
 
 /// The repositories a scope works with: its own and those it works on alongside it, then the ones it only takes

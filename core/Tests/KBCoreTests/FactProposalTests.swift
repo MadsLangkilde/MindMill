@@ -36,8 +36,9 @@ struct FactProposalTests {
     @Test func everyBuildSessionButTheOverviewIsAskedToProposeFacts() {
         for role in [SessionRole.solo, .lead, .member] {
             let p = ClaudeModes.crew(role: role, sessionID: "s1", leadTitle: nil, leadID: nil, project: "alpha")
-            #expect(p.contains("kb inbox add --project alpha --section facts --proposed-by session:s1"))
+            #expect(p.contains("kb inbox add --project alpha --section <facts|decisions|ideas|followups|references|architecture|notes> --proposed-by session:s1"))
+            #expect(p.contains("kb goal propose"))
         }
-        #expect(!ClaudeModes.crew(role: .overseer, sessionID: "s1", leadTitle: nil, leadID: nil, project: nil).contains("--section facts"))
+        #expect(!ClaudeModes.crew(role: .overseer, sessionID: "s1", leadTitle: nil, leadID: nil, project: nil).contains("--section <facts"))
     }
 }

@@ -43,6 +43,7 @@ struct AppSettingsView: View {
         case .meetings: MeetingSettingsView()
         case .sources: GlobalSourcesView()
         case .connections: ConnectionsSettingsView()
+        case .extensions: ExtensionsSettingsView()
         case .voice: VoiceSettingsView()
         case .remote: RemoteSettingsView()
         case .shortcuts: ShortcutsSettingsView()
@@ -52,7 +53,7 @@ struct AppSettingsView: View {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case general, appearance, knowledgeBase, ai, meetings, sources, connections, voice, remote, shortcuts, about
+    case general, appearance, knowledgeBase, ai, meetings, sources, connections, extensions, voice, remote, shortcuts, about
 
     var id: String { rawValue }
 
@@ -65,6 +66,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .meetings: "Meetings"
         case .sources: "Sources"
         case .connections: "Connections"
+        case .extensions: "Skills & Plugins"
         case .voice: "Voice"
         case .remote: "Remote"
         case .shortcuts: "Shortcuts"
@@ -81,6 +83,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .meetings: "person.2.wave.2"
         case .sources: "point.3.connected.trianglepath.dotted"
         case .connections: "link"
+        case .extensions: "puzzlepiece.extension"
         case .voice: "waveform"
         case .remote: "iphone.radiowaves.left.and.right"
         case .shortcuts: "keyboard"

@@ -81,3 +81,22 @@ extension AppModel {
         }
     }
 }
+
+extension AppModel {
+    /// Makes the existing entries of each kind follow its new default.
+    func applySharingDefaults(_ kinds: [(KBSection, Bool)], scope: String) {
+        guard !kinds.isEmpty else { return }
+        let cli = cli
+        Task {
+            var changed = 0
+            for (kind, shared) in kinds {
+                let r = await cli.result(["share", "default", kind.rawValue, shared ? "shared" : "private", "--scope", scope, "--apply", "--json"])
+                if r.status != 0 { errorMessage = r.stderr.replacingOccurrences(of: "kb: ", with: ""); break }
+                changed += (try? JSONSerialization.jsonObject(with: Data(r.stdout.utf8)) as? [String: Any])?["changed"] as? Int ?? 0
+            }
+            notice = changed == 0 ? "No existing entries needed changing." : "Changed \(changed) existing entr\(changed == 1 ? "y" : "ies")."
+            scheduleSharingRefresh(after: 0)
+            reload()
+        }
+    }
+}

@@ -118,6 +118,10 @@ extension AppModel {
         engine.onReport = { [weak self] text, error in
             if error { self?.errorMessage = text } else { self?.notice = text }
         }
+        engine.onVoiceChanged = { [weak self] in self?.voiceRevision += 1 }
+        engine.onSkillsChanged = { [weak self] in self?.skillsRevision += 1 }
+        engine.onSharingChanged = { [weak self] in self?.scheduleSharingRefresh(after: 0) }
+        engine.watchVoiceSettings()
     }
 
     /// Where a new or moved session shows: Build's detail, or the Plan session in the Claude window.

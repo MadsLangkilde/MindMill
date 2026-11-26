@@ -45,6 +45,35 @@ final class MacVoiceMode {
         }
         prefs = VoicePreferences.load()
         let c = await model.startVoiceConversation(scope: model.projectID)
+        begin(c, model: model, startRelay: true)
+    }
+
+    /// Live voice in a work session through the voice API: the voice model hands what the user says to the session
+    /// and says its progress and answer. Fails when no voice API is set up.
+    func start(_ model: AppModel, in session: WorkSession) async {
+        if isOn { stop() }
+        self.model = model
+        phase = .starting
+        notice = nil
+        if let problem = await SpeechListener.authorize() {
+            phase = .failed(problem)
+            return
+        }
+        prefs = VoicePreferences.load()
+        var holder: ((RealtimeRelay.Audio) -> Void)?
+        guard let c = model.engine.startSessionVoice(session, audioOut: { audio in holder?(audio) }) else {
+            phase = .failed("Live talk in a session needs a voice API key: add one in Settings → Voice.")
+            return
+        }
+        sessionID = session.id
+        holder = { [weak self] audio in self?.playAPI(audio.pcm) }
+        begin(c, model: model, startRelay: false)
+    }
+
+    /// The session this live talk is in, if any.
+    private(set) var sessionID: String?
+
+    private func begin(_ c: VoiceConversation, model: AppModel, startRelay: Bool) {
         conversation = c
         sink = c.listen { [weak self] out in self?.handle(out) }
 
@@ -71,7 +100,7 @@ final class MacVoiceMode {
                 guard let c, let relay = self?.model?.realtimeRelays[c.id] else { return }
                 relay.sendAudio(pcm)
             }
-            model.startRealtime(c) { [weak self] audio in self?.playAPI(audio.pcm) }
+            if startRelay { model.startRealtime(c) { [weak self] audio in self?.playAPI(audio.pcm) } }
         }
         do {
             try l.start(language: prefs.language, voiceProcessing: true)
@@ -94,6 +123,7 @@ final class MacVoiceMode {
             model?.endVoiceConversation(c.id)
         }
         conversation = nil
+        sessionID = nil
         heard = ""
         level = 0
         if case .failed = phase {} else { phase = .off }
@@ -142,6 +172,9 @@ final class MacVoiceMode {
             }
         case .clear:
             apiPlayer?.stop()
+        case .fallback(_, let speech) where sessionID != nil:
+            stop()
+            phase = .failed(speech + " Type or dictate in the session meanwhile.")
         case .fallback(_, let speech):
             notice = speech
             switchToKeyless()

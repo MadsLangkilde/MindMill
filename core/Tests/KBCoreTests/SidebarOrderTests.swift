@@ -3,8 +3,9 @@ import Testing
 @testable import KBCore
 
 struct SidebarOrderTests {
-    @Test func inboxIsFirstByDefault() {
-        #expect(SidebarOrder.resolve([], defaults: SidebarOrder.planning).first == "inbox")
+    @Test func notesThenInboxComeFirstByDefault() {
+        #expect(SidebarOrder.resolve([], defaults: SidebarOrder.planning).prefix(2) == ["notes", "inbox"])
+        #expect(SidebarOrder.resolve(["decisions", "inbox"], defaults: SidebarOrder.planning).first == "notes")
     }
 
     @Test func aSavedOrderWinsAndNewRowsFindTheirPlace() {

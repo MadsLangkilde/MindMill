@@ -40,7 +40,9 @@ extension MindmillEngine {
             if id.section == .facts {
                 extra = ["linked": .array(index.linkedFacts(of: id).map(RemotePayloads.entrySummary))]
             }
-            return ["id": .string(id.rawValue), "frontmatter": .object(fm), "body": .string(doc.body), "extra": extra]
+            return ["id": .string(id.rawValue), "frontmatter": .object(fm), "body": .string(doc.body), "extra": extra,
+                    "sharing": await sharingJSON(id),
+                    "suggestions": .array(suggestions(from: [id.rawValue]).map(Self.suggestionJSON))]
         }
 
         m.register("entry.save") { [unowned self] _, p in
@@ -59,6 +61,7 @@ extension MindmillEngine {
             if let body = p["body"]?.string { doc.body = body }
             _ = try KBStore.save(&doc, root: rootURL)
             reload()
+            suggestForNote(doc.id)
             return ["saved": true, "id": .string(doc.id.rawValue)]
         }
 
@@ -69,6 +72,7 @@ extension MindmillEngine {
             if case .object(let f)? = p["fields"] { for (k, v) in f { if let s = v.string { fields[k] = s } } }
             let id = try await createEntry(scope: scope, section: section, title: title, summary: p["summary"]?.string,
                                            tags: p["tags"]?.strings ?? [], fields: fields, body: p["body"]?.string)
+            if let e = EntryID(id) { suggestForNote(e) }
             return ["id": .string(id)]
         }
 

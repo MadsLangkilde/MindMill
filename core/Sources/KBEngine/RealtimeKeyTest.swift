@@ -51,4 +51,7 @@ public enum RealtimeKeyTest {
             return "Couldn't reach the provider: \(error.localizedDescription)"
         }
     }
+
+    /// Whether `test`'s answer means the key works.
+    public static func passed(_ message: String) -> Bool { message.hasPrefix("The key works (") }
 }

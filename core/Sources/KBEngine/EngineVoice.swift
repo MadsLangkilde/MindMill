@@ -160,6 +160,64 @@ extension MindmillEngine {
         relay.connect(model: prefs.model(for: provider), key: key, voice: prefs.apiVoice(for: provider), instructions: instructions)
     }
 
+    /// Live voice in a work session (`voice.start` with `session`): no brain of its own; the realtime model hands
+    /// what the user says to the session and says its progress and answer. Without the API engine it can't start.
+    public func startSessionVoice(_ s: WorkSession, audioOut: @escaping (RealtimeRelay.Audio) -> Void) -> VoiceConversation? {
+        let prefs = VoicePreferences.load()
+        guard voiceEngineChoice.engine() == .api, let provider = prefs.provider, let key = voiceKeys.key(provider: provider), !key.isEmpty,
+              let wire = RealtimeWires.wire(for: provider) else { return nil }
+        let c = VoiceConversation(scope: s.project)
+        c.engine = .api
+        c.sessionID = s.id
+        c.started = true
+        voiceConversations[c.id] = c
+        let tools = RealtimeRelay.Tools(definitions: SessionVoice.tools) { [weak self, weak c, weak s] name, args in
+            guard let self, let c, let s else { return "The session is gone." }
+            return self.runSessionVoiceTool(name, args, conversation: c, session: s)
+        }
+        let relay = RealtimeRelay(wire: wire, conversation: c, layer: actions,
+                                  askBrain: { _ in "Use send_to_session." },
+                                  audioOut: audioOut,
+                                  onFail: { [weak self, weak c] reason in
+                                      guard let self, let c else { return }
+                                      self.voiceFallBack(c, reason)
+                                  },
+                                  tools: tools)
+        realtimeRelays[c.id] = relay
+        let project = s.project.flatMap { p in index.projects.first { $0.id == p }?.title }
+        relay.connect(model: prefs.model(for: provider), key: key, voice: prefs.apiVoice(for: provider),
+                      instructions: SessionVoice.instructions(session: s.title, project: project))
+        return c
+    }
+
+    private func runSessionVoiceTool(_ name: String, _ args: JSONValue, conversation c: VoiceConversation, session s: WorkSession) -> String {
+        switch name {
+        case SessionVoice.send:
+            let message = (args["message"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !message.isEmpty else { return "Nothing to send: ask the user what they want." }
+            c.sessionFollower.begin(count: s.chat.items.count)
+            sessions.send(SpokenReply.message(message), in: s, display: message)
+            c.sessionFollower.markSent()
+            return SessionVoice.sentResult
+        case SessionVoice.stop:
+            c.sessionFollower.reset()
+            guard s.chat.isBusy else { return SessionVoice.idleResult }
+            sessions.stop(s)
+            return SessionVoice.stoppedResult
+        default:
+            return "There is no tool called \(name)."
+        }
+    }
+
+    /// A session changed: the live voices in it say what it finished saying.
+    func sessionVoiceChanged(_ s: WorkSession) {
+        for c in voiceConversations.values where c.sessionID == s.id && c.sessionFollower.following {
+            guard let relay = realtimeRelays[c.id] else { continue }
+            let items = s.chat.items.map { SessionVoiceFollower.Item(role: $0.role.rawValue, text: $0.text) }
+            for note in c.sessionFollower.update(items: items, busy: s.chat.isBusy) { relay.say(SessionVoice.prompt(note)) }
+        }
+    }
+
     private func voiceFallBack(_ c: VoiceConversation, _ reason: VoiceFailure) {
         realtimeRelays[c.id]?.close()
         realtimeRelays[c.id] = nil
@@ -180,6 +238,25 @@ extension MindmillEngine {
             VoicePreferences.load().remoteConfig(engine: voiceEngineChoice.engine())
         }
         m.register("voice.start") { [unowned self] client, p in
+            if let id = p["session"]?.string {
+                sessions.loadIfNeeded()
+                guard let s = sessions.session(id) else { throw RemoteError.notFound("No such session") }
+                var holder: VoiceConversation?
+                guard let c = startSessionVoice(s, audioOut: { [weak client] audio in
+                    guard let id = holder?.id else { return }
+                    client?.sendBinary(RemoteFrame(header: ["kind": "voice", "conversation": .string(id), "format": "pcm24k",
+                                                            "seq": .number(Double(audio.seq))], payload: audio.pcm).encoded())
+                }) else {
+                    throw RemoteError(code: "unavailable", message: "Live voice in a session needs a voice API key in Settings → Voice on the \(platform.machineWord).")
+                }
+                holder = c
+                c.owner = ObjectIdentifier(client)
+                c.listen { [weak client] out in
+                    guard let client, let (name, data) = out.remoteEvent(conversation: c.id) else { return }
+                    client.send(.event(name: name, data: data))
+                }
+                return ["conversation": .string(c.id), "engine": .string(c.engine.rawValue), "session": .string(s.id)]
+            }
             let force = p["engine"]?.string == VoiceEngineKind.keyless.rawValue
             let engine = voiceEngineChoice.engine(forceKeyless: force)
             let c = await startVoiceConversation(scope: p["scope"]?.string, engine: engine)

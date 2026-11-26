@@ -2,12 +2,13 @@ import Foundation
 
 /// What a Plan session is for, so Plan's Sessions page can group them. The order is the page's.
 public enum PlanSessionKind: String, CaseIterable, Sendable {
-    case assistant, workItems, research, ideas, discussions, followups, meetings, goals, entries, questions
+    case assistant, workItems, notes, research, ideas, discussions, followups, meetings, goals, entries, questions
 
     public var title: String {
         switch self {
         case .assistant: return "Assistant"
         case .workItems: return "Work items"
+        case .notes: return "Notes"
         case .research: return "Research"
         case .ideas: return "Ideas"
         case .discussions: return "Discussions"
@@ -23,6 +24,7 @@ public enum PlanSessionKind: String, CaseIterable, Sendable {
         switch self {
         case .assistant: return "wand.and.stars"
         case .workItems: return "plus.rectangle.on.rectangle"
+        case .notes: return NoteStatus.icon
         case .research: return ResearchStatus.icon
         case .ideas: return "lightbulb.max"
         case .discussions: return "bubble.left.and.bubble.right"
@@ -37,11 +39,11 @@ public enum PlanSessionKind: String, CaseIterable, Sendable {
 
 public enum PlanSessions {
     /// `about` prefixes of sessions started from a research, an idea or a discussion; the entry id follows.
-    static let prefixes: [(String, PlanSessionKind)] = [("research:", .research), ("idea:", .ideas), ("discussion:", .discussions)]
+    static let prefixes: [(String, PlanSessionKind)] = [("research:", .research), ("idea:", .ideas), ("discussion:", .discussions), ("note:", .notes)]
     /// The plugin was called `kb` before `mindmill`; older sessions start with `/kb:`.
     static let pluginPrefixes = ["/mindmill:", "/kb:"]
     static let skills: [(String, PlanSessionKind)] = pluginPrefixes.flatMap { p in
-        [(p + "research", PlanSessionKind.research), (p + "idea", .ideas), (p + "discussion", .discussions)]
+        [(p + "research", PlanSessionKind.research), (p + "idea", .ideas), (p + "discussion", .discussions), (p + "notes", .notes)]
     }
 
     /// Where it was started, before what it does: the assistant, a research, idea or discussion; then creating PBIs
@@ -62,6 +64,7 @@ public enum PlanSessions {
             switch id.section {
             case .research: return .research
             case .ideas: return .ideas
+            case .notes: return .notes
             case .discussions: return .discussions
             case .followups: return .followups
             case .meetings: return .meetings

@@ -208,7 +208,8 @@ extension MindmillEngine {
             let since = max(0, p["since"]?.int ?? 0)
             let items = s.chat.items.dropFirst(since).map(Self.itemJSON)
             return ["session": sessionJSON(s), "items": .array(items), "count": .number(Double(s.chat.items.count)),
-                    "denials": .array(s.chat.denials.map(JSONValue.string))]
+                    "denials": .array(s.chat.denials.map(JSONValue.string)),
+                    "suggestions": .array(suggestions(from: suggestionOrigins(s)).map(Self.suggestionJSON))]
         }
 
         m.register("session.send") { [unowned self] _, p in

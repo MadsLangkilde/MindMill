@@ -138,6 +138,7 @@ struct ContentView: View {
             NewDiscussionSheet(request: request)
         }
         .sheet(item: $model.newResearchRequest) { NewResearchSheet(request: $0) }
+        .sheet(item: $model.newNoteRequest) { NewNoteSheet(request: $0) }
         .sheet(item: $model.concludeDiscussionRequest) { request in
             ConcludeDiscussionSheet(id: request.entry)
         }
@@ -610,6 +611,8 @@ struct ContentColumn: View {
                     DiscussionsView(project: project)
                 case .section(.ideas):
                     IdeasView(project: project)
+                case .section(.notes):
+                    NotesView(project: project)
                 case .section(.research):
                     ResearchListView(project: project)
                 case .section(.architecture):
@@ -659,6 +662,7 @@ struct NewEntryMenu: View {
     var body: some View {
         Menu {
             Section("In \(model.project?.title ?? "")") {
+                Button("New Note…") { if let p = model.projectID { model.newNote(project: p) } }
                 Button("New Decision…") { model.requestNewEntry(.decisions) }
                 Button("New Meeting…") { model.requestNewEntry(.meetings) }
                 Button("New Discussion…") {

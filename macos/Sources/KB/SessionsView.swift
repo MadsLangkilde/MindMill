@@ -90,6 +90,8 @@ struct SessionView: View {
     @FocusState private var inputFocused: Bool
     @State private var multiPicked: Set<String> = []
     @State private var suggestionIndex = 0
+    @State private var skills: [SkillInfo] = []
+    @State private var skillsLoadedAt = -1
     @State private var dropTargeted = false
     @State private var viewSize: CGSize = .zero
     @AppStorage(PanelDock.key("waitingPanel.overseer")) private var overseerDock = PanelDock.standard.rawValue
@@ -150,6 +152,11 @@ struct SessionView: View {
             if session.space == .build, session.researchAskShown { ResearchAsk(session: session) }
             if session.space == .build, session.testAskShown { TestAskCard(session: session) }
             if let s = session.subject { subjectChip(s) }
+            if session.role != .overseer {
+                SuggestionCards(origins: model.engine.suggestionOrigins(session), title: "Suggested by this session", inset: 12)
+                    .frame(maxHeight: 260)
+            }
+            SessionLiveBar(session: session)
             if !suggestions.isEmpty { suggestionList }
             inputBar
         }
@@ -273,6 +280,10 @@ struct SessionView: View {
         }
         if session.space == .build, session.role != .overseer, session.project != nil { TestHeaderButton(session: session) }
         if session.role != .overseer { StrategyButton(session: session) }
+        if session.role != .overseer, model.liveVoiceAvailable, model.voiceMode.sessionID != session.id {
+            Button { model.startLiveVoice(in: session) } label: { Label("Talk", systemImage: "waveform") }
+                .help("Talk live with this session through \(model.voiceEngineName): it hands what you say to \(Brain.name) and tells you its progress and answer")
+        }
         Button { finding ? closeFind() : openFind() } label: { Label("Find", systemImage: "magnifyingglass") }
             .help(finding ? "Close the search" : "Find in this conversation (⌘F)")
         if session.space == .plan { PlanArchiveButton(session: session) }
@@ -638,40 +649,46 @@ struct SessionView: View {
         .padding(.top, 8)
     }
 
-    private var suggestions: [String] {
+    private var suggestions: [SkillInfo] {
         let t = session.input
         guard t.hasPrefix("/"), !t.contains(" "), !t.contains("\n") else { return [] }
-        let q = t.dropFirst().lowercased()
-        let all = session.chat.commands.isEmpty ? model.fallbackCommands(for: session) : session.chat.commands
-        let matches = all.filter { q.isEmpty || $0.lowercased().contains(q) }
-        let ranked = matches.sorted { a, b in
-            let ap = a.lowercased().hasPrefix(q) || a.lowercased().hasPrefix("mindmill:" + q)
-            let bp = b.lowercased().hasPrefix(q) || b.lowercased().hasPrefix("mindmill:" + q)
-            return ap != bp ? ap : a < b
-        }
-        return Array(ranked.prefix(8))
+        let all = skills.isEmpty
+            ? (session.chat.commands.isEmpty ? model.fallbackCommands(for: session) : session.chat.commands).map { name in
+                let parts = name.split(separator: ":", maxSplits: 1).map(String.init)
+                return parts.count == 2 ? SkillInfo(name: parts[1], description: "", source: .command, plugin: parts[0])
+                    : SkillInfo(name: name, description: "", source: .command)
+            }
+            : skills
+        return SkillCatalog.matches(all, query: String(t.dropFirst()))
+    }
+
+    private func loadSkills() {
+        guard skillsLoadedAt != model.skillsRevision else { return }
+        skillsLoadedAt = model.skillsRevision
+        Task { skills = await model.engine.skillCatalog(scope: session.project, session: session) }
     }
 
     private var suggestionList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.element) { i, name in
-                Button {
-                    session.input = "/\(name) "
-                    inputFocused = true
-                } label: {
-                    HStack {
-                        Text("/\(name)").font(.callout.monospaced())
-                        Spacer()
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { i, skill in
+                        Button {
+                            session.input = skill.command + " "
+                            inputFocused = true
+                        } label: {
+                            SkillSuggestionRow(skill: skill, selected: i == min(suggestionIndex, suggestions.count - 1))
+                        }
+                        .buttonStyle(.plain)
+                        .id(i)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(i == min(suggestionIndex, suggestions.count - 1) ? Color.accentColor.opacity(0.14) : Color.clear)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .padding(.vertical, 4)
             }
+            .frame(maxHeight: 240)
+            .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: suggestionIndex) { _, i in proxy.scrollTo(i) }
         }
-        .padding(.vertical, 4)
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .top) { Divider() }
     }
@@ -694,7 +711,7 @@ struct SessionView: View {
                 .onSubmit(submit)
                 .onKeyPress(.tab) {
                     guard let pick = currentSuggestion else { return .ignored }
-                    session.input = "/\(pick) "
+                    session.input = pick.command + " "
                     return .handled
                 }
                 .onKeyPress(.downArrow) {
@@ -707,7 +724,10 @@ struct SessionView: View {
                     suggestionIndex = max(suggestionIndex - 1, 0)
                     return .handled
                 }
-                .onChange(of: session.input) { _, _ in suggestionIndex = 0 }
+                .onChange(of: session.input) { _, new in
+                    suggestionIndex = 0
+                    if new.hasPrefix("/") { loadSkills() }
+                }
                 .promptKeys($session.input, paused: !suggestions.isEmpty)
                 .pastesAttachments(active: inputFocused) { model.attachFromPasteboard($0, to: session) }
             Button { model.pickAttachments(for: session) } label: { Image(systemName: "paperclip") }
@@ -735,14 +755,13 @@ struct SessionView: View {
         .padding(12)
     }
 
-    private var currentSuggestion: String? {
+    private var currentSuggestion: SkillInfo? {
         suggestions.isEmpty ? nil : suggestions[min(suggestionIndex, suggestions.count - 1)]
     }
 
     private func submit() {
-        if let pick = currentSuggestion, session.input == "/" + session.input.dropFirst(), !session.input.contains(" "),
-           pick != String(session.input.dropFirst()) {
-            session.input = "/\(pick) "
+        if let pick = currentSuggestion, session.input.hasPrefix("/"), !session.input.contains(" "), pick.command != session.input {
+            session.input = pick.command + " "
             return
         }
         let files = session.pendingAttachments
@@ -998,5 +1017,33 @@ struct MessageTime: View {
             .foregroundStyle(.tertiary)
             .monospacedDigit()
             .help(at.formatted(date: .complete, time: .shortened))
+    }
+}
+
+/// One skill in the list that opens when typing `/`: its command, what it does, and where it comes from.
+struct SkillSuggestionRow: View {
+    let skill: SkillInfo
+    let selected: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(skill.command).font(.callout.monospaced()).fixedSize()
+            Text(skill.description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(Self.source(skill)).font(.caption2).foregroundStyle(.tertiary).fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(selected ? Color.accentColor.opacity(0.14) : Color.clear)
+        .contentShape(Rectangle())
+    }
+
+    static func source(_ s: SkillInfo) -> String {
+        switch s.source {
+        case .user: return "Mine"
+        case .project: return "This project"
+        case .plugin: return s.plugin ?? "Plugin"
+        case .command: return s.plugin ?? "Built in"
+        }
     }
 }

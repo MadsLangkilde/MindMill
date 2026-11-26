@@ -121,6 +121,12 @@ struct ChecklistTests {
         #expect(items.first { $0.id == "install-allowed" }?.status == .ok)
     }
 
+    @Test func aPhoneSeesOnlyWhatItCanTryItself() {
+        #expect(ProjectType.allCases.filter { $0.testable(on: RemotePlatform.android) } == [.android, .web])
+        #expect(ProjectType.allCases.filter { $0.testable(on: RemotePlatform.ios) } == [.ios, .web])
+        #expect(ProjectType.allCases.allSatisfy { $0.testable(on: nil) })
+    }
+
     @Test func missingToolBlocks() {
         var f = TestEnvironmentFacts()
         f.companionPaired = true

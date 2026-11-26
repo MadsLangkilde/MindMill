@@ -20,7 +20,7 @@ struct ProjectSettingsRequest: Identifiable, Equatable {
 }
 
 enum ProjectSettingsTab: String, Hashable {
-    case tracker, conventions, sources
+    case tracker, conventions, sources, sharing
 }
 
 struct NewMeetingRequest: Identifiable, Equatable {

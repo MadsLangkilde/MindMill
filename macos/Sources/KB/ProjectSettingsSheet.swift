@@ -10,6 +10,7 @@ struct ProjectSettingsSheet: View {
     @State private var original = ProjectSettings()
     @State private var tab: ProjectSettingsTab = .tracker
     @State private var tagsText = ""
+    @State private var applyExisting = false
 
     var body: some View {
         let title = model.index.project(request.project)?.title ?? request.project
@@ -24,6 +25,7 @@ struct ProjectSettingsSheet: View {
                     Text("Tracker").tag(ProjectSettingsTab.tracker)
                     Text("Conventions").tag(ProjectSettingsTab.conventions)
                     Text("Sources").tag(ProjectSettingsTab.sources)
+                    Text("Sharing").tag(ProjectSettingsTab.sharing)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -39,6 +41,7 @@ struct ProjectSettingsSheet: View {
                 case .sources:
                     SourcesEditor(sources: $settings.sources, project: request.project, scopeLabel: "this scope",
                                   inherited: GlobalSources.load(root: model.rootURL))
+                case .sharing: sharingForm
                 }
             }
             .frame(minHeight: 380)
@@ -193,10 +196,46 @@ struct ProjectSettingsSheet: View {
         }
     }
 
+    static let sharingKinds: [KBSection] = [.notes, .decisions, .facts, .architecture, .followups, .backlog, .ideas, .research,
+                                            .references, .discussions, .meetings, .overview]
+
+    private var sharingForm: some View {
+        let repo = model.sharing.repos[request.project]?.name
+        return Form {
+            Section {
+                Text(repo == nil
+                     ? "This scope has no repository on this Mac, so everything in it stays private."
+                     : "What's shared gets a copy in \(repo!)/knowledgebase, part of your next commit and pull request there. Private entries stay only in your knowledge base on this Mac. You can still change each entry on its own.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Section("New entries of each kind") {
+                ForEach(Self.sharingKinds) { kind in
+                    Picker(kind.title, selection: Binding(
+                        get: { SharingStatus.sharedByDefault(kind, chosen: settings.sharing) ? "shared" : "private" },
+                        set: { settings.sharing[kind.rawValue] = $0 })) {
+                        Text("Private").tag("private")
+                        Text("Shared").tag("shared")
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Toggle("Also change the entries already there when I save", isOn: $applyExisting)
+                    .help("Shares or makes private the existing entries of each kind you changed. Making entries private removes their copies from the repository; that goes out with your next commit there.")
+            }
+            .disabled(repo == nil)
+        }
+        .formStyle(.grouped)
+    }
+
     private func save() {
         do {
             if settings.tracker != original.tracker { settings.hasTracker = true }
             try settings.save(project: request.project, root: model.rootURL)
+            if applyExisting {
+                let changed = Self.sharingKinds.filter {
+                    SharingStatus.sharedByDefault($0, chosen: settings.sharing) != SharingStatus.sharedByDefault($0, chosen: original.sharing)
+                }
+                model.applySharingDefaults(changed.map { ($0, SharingStatus.sharedByDefault($0, chosen: settings.sharing)) }, scope: request.project)
+            }
             model.reload()
             dismiss()
         } catch {

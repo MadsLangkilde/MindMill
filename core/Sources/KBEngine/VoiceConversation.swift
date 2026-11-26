@@ -50,6 +50,9 @@ public final class VoiceConversation: Identifiable {
     @ObservationIgnored public var started = false
     /// The phone connection that started it, if any.
     @ObservationIgnored public var owner: ObjectIdentifier?
+    /// Live voice in this work session: the realtime model talks, the session does the work.
+    @ObservationIgnored public var sessionID: String?
+    @ObservationIgnored public var sessionFollower = SessionVoiceFollower()
 
     public init(scope: String?) {
         self.scope = scope

@@ -150,6 +150,11 @@ struct EntryDetailView: View {
                                 .padding(.horizontal, 24)
                                 .padding(.bottom, 12)
                         }
+                        if !doc.isNew, doc.id.section == .notes {
+                            NotePanel(id: doc.id)
+                                .padding(.horizontal, 24)
+                                .padding(.bottom, 12)
+                        }
                         if !doc.isNew, AppModel.pbiSources.contains(doc.id.section) {
                             RelatedPBIsPanel(id: doc.id)
                                 .padding(.horizontal, 24)

@@ -116,6 +116,27 @@ public final class TestCenter {
 /// Runs shell commands for testing with the user's login environment: zsh on macOS, Git Bash on Windows (Claude Code
 /// needs Git for Windows anyway), so the same POSIX commands and `quote` work on both.
 public enum TestShell {
+    /// What `command` printed, trimmed, when it succeeded and printed something.
+    public nonisolated static func output(_ command: String, environment: [String: String], timeout: TimeInterval = 20) async -> String? {
+        let r = await run(command, environment: environment, timeout: timeout)
+        let out = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return r.code == 0 && !out.isEmpty ? out : nil
+    }
+
+    /// Runs every probe at once (name, command) and gives each one's first line of output, for those that worked.
+    public nonisolated static func probe(_ probes: [(String, String)], environment: [String: String], timeout: TimeInterval = 10) async -> [String: String] {
+        await withTaskGroup(of: (String, String?).self) { group in
+            for (name, command) in probes {
+                group.addTask { (name, await output(command + " 2>&1", environment: environment, timeout: timeout)) }
+            }
+            var found: [String: String] = [:]
+            for await (name, out) in group {
+                if let line = out?.components(separatedBy: "\n").first?.trimmingCharacters(in: .whitespaces) { found[name] = line }
+            }
+            return found
+        }
+    }
+
     public struct Result {
         public var code: Int32
         public var output: String

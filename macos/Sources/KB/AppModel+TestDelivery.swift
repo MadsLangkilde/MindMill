@@ -32,24 +32,13 @@ final class MacTestPlatform: TestPlatform {
         f.cpu = await sh("sysctl -n machdep.cpu.brand_string") ?? ""
         if let gpu = await sh("system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Chipset Model/{print $2; exit}'") { f.gpu = gpu }
 
-        var tools: [String: String] = [:]
-        if let x = await sh("xcodebuild -version 2>/dev/null") { tools["xcode"] = first(x)?.replacingOccurrences(of: "Xcode ", with: "") }
-        if let x = await sh("swift --version 2>&1") { tools["swift"] = first(x) }
+        var tools = await TestShell.probe(TestRunner.toolProbes + [("xcode", "xcodebuild -version")], environment: env)
+        tools["xcode"] = tools["xcode"]?.replacingOccurrences(of: "Xcode ", with: "")
+        for name in ["gradle", "idf.py"] where tools[name] != nil { tools[name] = "installed" }
         let sdk = env["ANDROID_HOME"] ?? ""
         if FileManager.default.fileExists(atPath: sdk + "/platforms") {
             let platforms = (try? FileManager.default.contentsOfDirectory(atPath: sdk + "/platforms")) ?? []
             tools["android-sdk"] = platforms.sorted().last ?? "installed"
-        }
-        if let x = await sh("java -version 2>&1") { tools["java"] = first(x) }
-        let probes: [(String, String)] = [
-            ("gradle", "command -v gradle"), ("node", "node --version"), ("npm", "npm --version"), ("pnpm", "pnpm --version"),
-            ("python3", "python3 --version"), ("go", "go version"), ("cargo", "cargo --version"), ("dotnet", "dotnet --version"),
-            ("docker", "docker --version"), ("platformio", "pio --version"), ("idf.py", "command -v idf.py"), ("west", "west --version"),
-            ("adb", "adb version"), ("arm-none-eabi-gcc", "arm-none-eabi-gcc --version"), ("cmake", "cmake --version"),
-            ("tailscale", "tailscale version"), ("flutter", "flutter --version --machine 2>/dev/null | head -c 200"),
-        ]
-        for (name, cmd) in probes {
-            if let x = await sh(cmd + " 2>&1", timeout: 10) { tools[name] = name == "gradle" || name == "idf.py" ? "installed" : first(x) }
         }
         f.toolchains = tools
 

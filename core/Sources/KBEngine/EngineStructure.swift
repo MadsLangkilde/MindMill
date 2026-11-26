@@ -45,6 +45,7 @@ extension MindmillEngine {
         case .backlog: return (entries().filter { $0.backlogStatus == .proposed }.count, false)
         case .discussions: return (entries().filter { $0.discussionStatus == .open && $0.waitingOn == "me" }.count, false)
         case .research: return (entries().filter { $0.researchStatus == .review }.count, false)
+        case .notes: return (entries().filter { $0.noteStatus == .open }.count, false)
         case .decisions: return (entries().filter { $0.status == .proposed }.count, false)
         case .meetings:
             let today = KBDate.today()
@@ -134,6 +135,7 @@ extension KBSection {
         case .ideas: return "lightbulb.max"
         case .research: return ResearchStatus.icon
         case .references: return "bookmark"
+        case .notes: return "note.text"
         case .inbox: return "tray.and.arrow.down"
         }
     }

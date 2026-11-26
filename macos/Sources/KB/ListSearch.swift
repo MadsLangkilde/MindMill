@@ -4,7 +4,7 @@ import SwiftUI
 
 /// The lists that have their own search field. Each keeps its text while the app runs.
 enum ListSearchKey: String {
-    case today, reminders, goals, inbox, followups, backlog, discussions, ideas, research, references, decisions, timeline
+    case today, reminders, goals, inbox, followups, backlog, discussions, ideas, notes, research, references, decisions, timeline
     case meetings, facts, architecture, overview, pullRequests, buildSessions, myWork, strategies, projectDocs, quiz
 
     static func section(_ s: KBSection) -> ListSearchKey {
@@ -14,6 +14,7 @@ enum ListSearchKey: String {
         case .backlog: return .backlog
         case .discussions: return .discussions
         case .ideas: return .ideas
+        case .notes: return .notes
         case .research: return .research
         case .references: return .references
         case .decisions: return .decisions

@@ -26,14 +26,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SECTIONS = ("decisions", "meetings", "facts", "architecture", "followups", "backlog", "discussions", "ideas", "research",
-            "references", "inbox")
-DATED_SECTIONS = ("decisions", "meetings", "followups", "backlog", "discussions", "ideas", "research", "references")
-APPROVABLE = ("decisions", "facts", "architecture", "followups", "backlog")
+            "references", "notes", "inbox")
+DATED_SECTIONS = ("decisions", "meetings", "followups", "backlog", "discussions", "ideas", "research", "references",
+                  "notes")
+APPROVABLE = ("decisions", "facts", "architecture", "followups", "backlog", "ideas", "references", "notes")
 # `updates` and `question` mark a pending change to an existing fact (kb fact challenge).
 INBOX_ONLY_FIELDS = ("proposed_section", "proposed_by", "reason", "updates", "question")
 KIND_TO_SECTION = {"decision": "decisions", "meeting": "meetings", "fact": "facts",
                    "architecture": "architecture", "followup": "followups", "backlog": "backlog",
-                   "discussion": "discussions", "idea": "ideas", "research": "research", "reference": "references"}
+                   "discussion": "discussions", "idea": "ideas", "research": "research", "reference": "references",
+                   "note": "notes"}
 CONFIG_PATH = Path("~/.config/kb/config.json").expanduser()
 DEFAULT_ROOT = "~/projects/knowledge"
 
@@ -760,7 +762,7 @@ def note_entry_write(path: Path, new: bool) -> None:
     if sid not in scope_map(root):
         return
     section = "overview" if rel == "overview.md" else rel.split("/")[0]
-    if new and section in TEAM_SECTIONS and team_dir(root, sid):
+    if new and shared_by_default(root, sid, section) and team_dir(root, sid):
         shared = load_sharing(root, sid)
         if rel not in shared:
             shared[rel] = {}
@@ -770,6 +772,24 @@ def note_entry_write(path: Path, new: bool) -> None:
         import atexit
         atexit.register(lambda: [share_sync(root, x, push=rels) for x, rels in sorted(_touched_scopes.items())])
         _sync_registered = True
+
+
+def sharing_defaults(root: Path, sid: str) -> dict[str, str]:
+    """Each kind of entry's visibility when it is made: the scope's choice (settings.json `sharing`), else the team's
+    knowledge shared and the rest private."""
+    chosen = load_settings(root, sid).get("sharing")
+    chosen = chosen if isinstance(chosen, dict) else {}
+    out = {}
+    for section in ("overview", *SECTIONS):
+        if section == "inbox":
+            continue
+        v = chosen.get(section)
+        out[section] = v if v in ("private", "shared") else ("shared" if section in TEAM_SECTIONS else "private")
+    return out
+
+
+def shared_by_default(root: Path, sid: str, section: str) -> bool:
+    return sharing_defaults(root, sid).get(section) == "shared"
 
 
 def is_draft_file(path: Path) -> bool:
@@ -947,6 +967,39 @@ def share_status(root: Path, sid: str) -> dict:
 
 def cmd_share(a) -> int:
     root = kb_root()
+    if a.action == "defaults":
+        sid = current_scope(root, a.scope)
+        out = {"scope": sid, "repo": str(team_dir(root, sid).parent) if team_dir(root, sid) else None,
+               "defaults": sharing_defaults(root, sid)}
+        if a.json:
+            print(json.dumps(out, indent=2))
+        else:
+            for k, v in out["defaults"].items():
+                print(f"{k}\t{v}")
+        return 0
+    if a.action == "default":
+        sid = current_scope(root, a.scope)
+        if a.section == "inbox" or a.section not in ("overview", *SECTIONS):
+            sys.exit(f"kb: {a.section} has no sharing default")
+        data = load_settings(root, sid)
+        chosen = data.get("sharing") if isinstance(data.get("sharing"), dict) else {}
+        chosen[a.section] = a.visibility
+        data["sharing"] = chosen
+        write_atomic(settings_path(root, sid), json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        changed = 0
+        if a.apply:
+            share = a.visibility == "shared"
+            if share and not team_dir(root, sid):
+                sys.exit(f"kb: {sid} has no repository on this Mac, so its entries can't be shared")
+            shared = load_sharing(root, sid)
+            for e in scope_entries(root, sid):
+                if e.project != sid or e.section != a.section or (entry_rel(e) in shared) == share:
+                    continue
+                set_shared(root, e, share)
+                changed += 1
+        print(json.dumps({"changed": changed}) if a.json else f"{sid}: new {a.section} are {a.visibility}"
+              + (f"; changed {changed} existing" if a.apply else ""))
+        return 0
     if a.action == "set":
         e = find_entry(root, a.id)
         if not e:
@@ -1167,11 +1220,11 @@ def build_context(root: Path, cwd: Path) -> str:
     team = team_dir(root, pid)
     if team:
         out += ["", f"Every entry lives in the KB root. Shared ones (new decisions, facts, architecture, follow-ups and "
-                    f"backlog items are shared by default) also have a copy in `{team}`, part of this repository, that "
+                    f"backlog items are shared by default; `kb share defaults` shows this scope's choice per kind) also have a copy in `{team}`, part of this repository, that "
                     "`kb` keeps in sync: write and edit entries with `kb` or in the KB root, and the shared copies' "
                     "changes belong in the commits and pull request of the work they come from. `kb share set <id> "
                     "private|shared` changes it when the user asks. Meetings, discussions, the inbox and notes stay "
-                    "private and are never committed. Don't link a shared entry to a private one."]
+                    "private unless the user shares them. Don't link a shared entry to a private one."]
 
     repos = scope_repos(root, pid)
     if len(repos) > 1 or any(r["role"] == "reference" for r in repos):
@@ -1247,6 +1300,27 @@ def build_context(root: Path, cwd: Path) -> str:
         out += capped([f"- `{e.id}` {e.get('kind') or 'web'}: **{e.title}**" + (f" — {e.summary}" if e.summary else "")
                        for e in refs], MAX_FOLLOWUPS, "references", pid, "references")
 
+    research = sorted([e for e in entries if e.section == "research" and e.status in ("open", "review", "done")],
+                      key=lambda e: str(e.get("updated") or e.date), reverse=True)
+    if research:
+        out += ["", f"### Research ({len(research)}): what was already looked into; read its summary and takeaways "
+                    "(`kb show <id>`) before looking into the same thing again"]
+        out += capped([f"- `{e.id}` [{e.status}] **{e.title}**" + (f" — {e.summary}" if e.summary else "")
+                       for e in research], MAX_FOLLOWUPS, "research", pid, "research")
+    ideas = sorted([e for e in entries if e.section == "ideas" and (e.status or "new") in ("new", "exploring")],
+                   key=lambda e: str(e.get("updated") or e.date), reverse=True)
+    if ideas:
+        out += ["", f"### Open ideas ({len(ideas)}), not decided"]
+        out += capped([f"- `{e.id}` **{e.title}**" + (f" — {e.summary}" if e.summary else "") for e in ideas],
+                      MAX_FOLLOWUPS, "ideas", pid, "ideas")
+    notes = sorted([e for e in entries if e.section == "notes" and (e.status or "open") == "open"],
+                   key=lambda e: str(e.get("updated") or e.date), reverse=True)
+    if notes:
+        out += ["", f"### The user's notes ({len(notes)}), their own thoughts not filed anywhere yet; read one when it "
+                    "bears on the task"]
+        out += capped([f"- `{e.id}` **{e.title}**" + (f" — {e.summary}" if e.summary else "") for e in notes],
+                      MAX_FOLLOWUPS, "notes", pid, "notes")
+
     proposed = [e for e in entries if e.section == "backlog" and e.status == "proposed"]
     inbox = [e for e in entries if e.section == "inbox"]
     if proposed or inbox:
@@ -1284,9 +1358,11 @@ def build_context(root: Path, cwd: Path) -> str:
 BEHAVIOUR = """### How to use the knowledge base in this session
 The index above is a title list. Read a full entry (`{kb} show <id>`, or Read the file) before you rely on it.
 
-1. **When the user starts a task**, check the index for entries that bear on it. If any do, read them and open
-   your first reply with a short **From the KB** block: at most five one-line bullets citing entry ids, and
-   suggestions only where an entry changes how the task should be done. Say nothing when nothing is relevant.
+1. **When the user starts a task**, check the index for entries that bear on it: decisions, facts, the
+   architecture notes of the part you touch, references, research already done, open ideas, the user's notes and
+   the project documentation. If any do, read them and open your first reply with a short **From the KB** block: at
+   most five one-line bullets citing entry ids, and suggestions only where an entry changes how the task should be
+   done. Say nothing when nothing is relevant. Keep them in mind while you work, not only at the start.
 2. **The user overrides the KB.** If they decide against an entry in force, do it their way, then record it
    with the `mindmill:decide` skill: a new decision that supersedes the old one. Tell them in one line which entry
    you superseded. Never edit an old decision's body.
@@ -1295,8 +1371,13 @@ The index above is a title list. Read a full entry (`{kb} show <id>`, or Read th
    notes. If the user asked for it, write it (`mindmill:decide`, `kb new fact`, `kb new followup`). If they only
    mentioned it ("that's done already"), check whether the KB has it, then ask once (AskUserQuestion, or a
    `choices` block in the Mindmill app) what to record and where, for example "Follow-up in <scope>, marked done",
-   and write it on yes. Pick the scope by what the item is about (rule 6). Only what you noticed
-   yourself, without the user saying it, is proposed through `kb inbox add … --proposed-by session:<session id>`.
+   and write it on yes. Pick the scope by what the item is about (rule 6). What you noticed yourself, without
+   the user saying it, is proposed where it belongs, for the user to add or dismiss with one click:
+   `kb inbox add --section <facts|decisions|ideas|followups|references|architecture|notes|backlog>
+   --proposed-by session:<session id> --title … --summary … --reason "<what showed it>"` (in the Mindmill app
+   `$KB_SESSION_ID` is the session id). Propose as you go when something durable comes up (a fact about the
+   code or a system, a decision taken in passing, an idea for later, a loose end, a page worth keeping), at most a
+   few per task, after checking with `kb search` that it isn't there already, and say so in one line.
 4. **Meetings** run through `mindmill:meeting` (and `mindmill:prep`); work items through `mindmill:work-item`; questions
    that need more than the index through `mindmill:ask`; "start my day" through `mindmill:today`.
 5. Entries can be edited by the user at any time in the Mindmill app. The prompt hook reports files that changed
@@ -1318,10 +1399,12 @@ The index above is a title list. Read a full entry (`{kb} show <id>`, or Read th
    corrected text on stdin and `--body-stdin` when you know it, and say so in one line. The user decides in
    the Mindmill app."""
 
-GOALS_RULE = """9. **Side goals** are the user's personal long-term goals, a quiet background agenda. When a task
-   naturally gives a chance to move toward one, add at most one short line at the end of your brief or
-   summary ("Side goal: …"). Never change a task's scope or priority for a goal, never raise one during a
-   live meeting, and stay silent when nothing fits."""
+GOALS_RULE = """9. **Side goals** are the user's personal long-term goals, a quiet background agenda. When what
+   the user did in this session moves one of them forward, propose it as a line for the goal's log:
+   `kb goal propose <goal id> "<what was done, in one line, in words>"`; the user adds it or dismisses it.
+   When a task naturally gives a chance to move toward one, add at most one short line at the end of your
+   brief or summary ("Side goal: …"). Never change a task's scope or priority for a goal, never raise one
+   during a live meeting, and stay silent when nothing fits."""
 
 
 # ---------------------------------------------------------------- session state
@@ -1491,6 +1574,7 @@ RESEARCH_TEMPLATE = ("## Question\n{body}\n\n## Findings\n\n## Open questions\n\
                      "## Takeaways\n")
 RESEARCH_NOTE = {"finding": ("Findings", "- "), "question": ("Open questions", "- [ ] "), "source": ("Sources", "- "),
                  "takeaway": ("Takeaways", "- ")}
+NOTE_TEMPLATE = "## Notes\n{body}\n\n## Summary\n\n## Filed\n"
 IDEA_NOTE = {"thought": ("Brainstorm", "- "), "question": ("Open questions", "- [ ] "), "step": ("Next steps", "- [ ] "),
              "turned": ("Turned into", "- ")}
 
@@ -1505,6 +1589,7 @@ TEMPLATES = {
     "references": "## Why it matters\n{body}\n\n## Content\n",
     "ideas": IDEA_TEMPLATE,
     "research": RESEARCH_TEMPLATE,
+    "notes": NOTE_TEMPLATE,
 }
 
 STATUSES = {
@@ -1515,6 +1600,7 @@ STATUSES = {
     "discussions": ("open", "parked", "concluded"),
     "ideas": ("new", "exploring", "shelved", "done"),
     "research": ("open", "review", "done", "parked"),
+    "notes": ("open", "filed"),
 }
 WAITING_ON = ("me", "others", "nobody")
 
@@ -3959,6 +4045,59 @@ def cmd_idea(a) -> int:
     return 0
 
 
+def note_title(text: str) -> str:
+    first = next((x.strip(" #-*") for x in text.strip().split("\n") if x.strip()), "Note")
+    words = first.split()
+    return " ".join(words[:8]) + ("…" if len(words) > 8 else "")
+
+
+def cmd_note(a) -> int:
+    root = kb_root()
+    if a.action == "list":
+        entries = all_entries(root) if a.all_projects else scope_entries(root, a.project or current_project_id(root))
+        rows = [e for e in entries if e.section == "notes" and (a.all or (e.status or "open") == "open")]
+        rows.sort(key=lambda e: str(e.get("updated") or e.date), reverse=True)
+        for e in rows:
+            print(f"{e.id}\t{e.get('updated') or e.date}\t{e.title}\t{e.status or 'open'}\t{e.summary}")
+        return 0
+    today = dt.date.today().isoformat()
+    if a.action == "add":
+        text = (a.text if a.text is not None else sys.stdin.read()).strip()
+        if not text:
+            sys.exit("kb: nothing to note; pass --text or the note on stdin")
+        if a.to:
+            e = find_entry(root, a.to)
+            if not e or e.section != "notes":
+                sys.exit(f"kb: no note {a.to}")
+            e.body = discussion_section_append(e.body, "Notes", text)
+        else:
+            pid = target_project(root, a.project, True)
+            title = one_line(a.title) if a.title else note_title(text)
+            path = entry_path(root, pid, "notes", title, today, None)
+            write_atomic(path, render_entry([("title", title), ("date", today), ("status", "open")],
+                                            NOTE_TEMPLATE.format(body=text)))
+            print(f"{pid}/notes/{path.stem}")
+            return 0
+    else:
+        e = find_entry(root, a.id)
+        if not e or e.section != "notes":
+            sys.exit(f"kb: no note {a.id}")
+        if a.action == "status":
+            e.set("status", a.status)
+        elif a.action == "summary":
+            text = (a.text if a.text is not None else sys.stdin.read()).strip()
+            e.body = section_set(e.body, "Summary", text)
+            first = text.split("\n")[0].strip(" -*")
+            if first:
+                e.set("summary", one_line(first)[:200])
+        elif a.action == "filed":
+            e.body = discussion_section_append(e.body, "Filed", "- " + " ".join(a.text.split()))
+    e.set("updated", today)
+    e.save()
+    print(e.id)
+    return 0
+
+
 def section_set(body: str, heading: str, text: str) -> str:
     """Replaces what is under `## heading` (made at the end when missing)."""
     lines = body.rstrip("\n").split("\n") if body.strip() else []
@@ -5288,7 +5427,7 @@ def body_section(body: str, heading: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-ENTRY_SECTIONS = "decisions|meetings|facts|architecture|followups|backlog|discussions|ideas|research|references|inbox|goals|reminders|daily"
+ENTRY_SECTIONS = "decisions|meetings|facts|architecture|followups|backlog|discussions|ideas|research|references|notes|inbox|goals|reminders|daily"
 
 
 def private_ref_pattern(root: Path) -> re.Pattern:
@@ -7861,6 +8000,15 @@ def main(argv: list[str]) -> int:
     shsy.add_argument("--push", action="append", metavar="ID",
                       help="an entry changed here: copy it to this checkout's repository even if the copy differs")
     shsy.add_argument("--json", action="store_true")
+    shd = shs.add_parser("defaults", help="whether each kind of entry is private or shared when it is made")
+    shd.add_argument("--scope")
+    shd.add_argument("--json", action="store_true")
+    shdf = shs.add_parser("default", help="make a kind of entry private or shared when it is made (--apply: also the existing ones)")
+    shdf.add_argument("section")
+    shdf.add_argument("visibility", choices=("private", "shared"))
+    shdf.add_argument("--scope")
+    shdf.add_argument("--apply", action="store_true")
+    shdf.add_argument("--json", action="store_true")
     shse = shs.add_parser("set", help="share an entry with the team or make it private")
     shse.add_argument("id")
     shse.add_argument("visibility", choices=["private", "shared"])
@@ -8201,6 +8349,27 @@ def main(argv: list[str]) -> int:
     rsst.add_argument("status", choices=STATUSES["research"])
     rsst.add_argument("--transferred", help="what the takeaways were added to: wi:<id> or an entry id")
 
+    nt = sub.add_parser("note", help="the user's notes that don't fit elsewhere yet: list, add, summary, filed, status")
+    nts = nt.add_subparsers(dest="action", required=True)
+    ntl = nts.add_parser("list", help="open notes, newest activity first")
+    ntl.add_argument("--project", "--scope", dest="project")
+    ntl.add_argument("--all", action="store_true", help="also filed ones")
+    ntl.add_argument("--all-projects", action="store_true")
+    nta = nts.add_parser("add", help="write a note down (text from --text or stdin), or add to one with --to")
+    nta.add_argument("--text")
+    nta.add_argument("--title")
+    nta.add_argument("--to", help="an existing note's id")
+    nta.add_argument("--project", "--scope", dest="project")
+    ntsu = nts.add_parser("summary", help="write what the note comes to (from --text or stdin), as confirmed with the user")
+    ntsu.add_argument("id")
+    ntsu.add_argument("--text")
+    ntf = nts.add_parser("filed", help="record where part of the note went: `<section>: <title>`")
+    ntf.add_argument("id")
+    ntf.add_argument("--text", required=True)
+    ntst = nts.add_parser("status", help="open, or filed when everything in it went where it belongs")
+    ntst.add_argument("id")
+    ntst.add_argument("status", choices=STATUSES["notes"])
+
     ide = sub.add_parser("idea", help="ideas to brainstorm: list, add a thought, question, next step or what it turned into")
     ids_ = ide.add_subparsers(dest="action", required=True)
     idl = ids_.add_parser("list", help="new and exploring ideas, newest activity first")
@@ -8494,7 +8663,7 @@ def main(argv: list[str]) -> int:
         "backlog": cmd_backlog, "tracker": cmd_tracker, "sprint": cmd_sprint, "work": cmd_work, "layout": cmd_layout, "followup": cmd_followup, "settings": cmd_settings, "today": cmd_today,
         "sources": cmd_sources, "delete": cmd_delete, "move": cmd_move, "calendar": cmd_calendar,
         "reminder": cmd_reminder, "email": cmd_email, "goal": cmd_goal, "scopes": cmd_scopes, "tags": cmd_tags, "scope": cmd_scope, "project": cmd_project, "fact": cmd_fact, "crew": cmd_crew, "sync": cmd_sync, "share": cmd_share, "repos": cmd_repos, "factory": cmd_factory, "test": cmd_test, "scan": cmd_scan,
-        "strategy": cmd_strategy, "people": cmd_people, "pr": cmd_pr, "discussion": cmd_discussion, "idea": cmd_idea, "research": cmd_research, "docs": cmd_docs,
+        "strategy": cmd_strategy, "people": cmd_people, "pr": cmd_pr, "discussion": cmd_discussion, "idea": cmd_idea, "note": cmd_note, "research": cmd_research, "docs": cmd_docs,
     }[a.cmd](a)
 
 

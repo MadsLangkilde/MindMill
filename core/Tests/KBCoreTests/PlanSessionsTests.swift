@@ -27,7 +27,9 @@ import Testing
         #expect(PlanSessions.kind(title: "Assistant", about: "assistant", firstMessage: "Create a PBI") == .assistant)
         #expect(PlanSessions.kind(title: "Notes", about: "acme/research/2026-11-20-auth", firstMessage: "Tidy the notes") == .research)
         #expect(PlanSessions.kind(title: "Coach", about: "goals/run-a-marathon", firstMessage: "How am I doing?") == .goals)
-        #expect(PlanSessionKind.allCases.map(\.title) == ["Assistant", "Work items", "Research", "Ideas", "Discussions",
+        #expect(PlanSessions.kind(title: "Note: Fridays", about: "note:acme/notes/2026-11-26-fridays", firstMessage: "/mindmill:notes discuss x") == .notes)
+        #expect(PlanSessions.origin(about: "note:acme/notes/2026-11-26-fridays") == "acme/notes/2026-11-26-fridays")
+        #expect(PlanSessionKind.allCases.map(\.title) == ["Assistant", "Work items", "Notes", "Research", "Ideas", "Discussions",
                                                            "Follow-ups", "Meetings", "Goals", "On entries", "Questions"])
     }
 

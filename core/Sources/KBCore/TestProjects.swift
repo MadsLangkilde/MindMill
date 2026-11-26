@@ -6,6 +6,16 @@ public enum ProjectType: String, Codable, CaseIterable, Sendable, Identifiable {
 
     public var id: String { rawValue }
 
+    /// Whether a phone of `platform` can try a build of this kind of project itself: its own apps, and websites.
+    /// Anything else (no phone, a desktop shell) sees every kind.
+    public func testable(on platform: String?) -> Bool {
+        switch platform {
+        case RemotePlatform.android: return self == .android || self == .web
+        case RemotePlatform.ios: return self == .ios || self == .web
+        default: return true
+        }
+    }
+
     public var title: String {
         switch self {
         case .ios: return "iOS app"

@@ -3,7 +3,7 @@ import Foundation
 /// The user's order of the sidebar rows in a section, stored as keys. Rows added in a later version appear at
 /// their default place; rows that are hidden for now (an overview not written yet) keep their place.
 public enum SidebarOrder {
-    public static let planning = ["inbox", "decisions", "meetings", "discussions", "ideas", "research", "facts", "followups", "references"]
+    public static let planning = ["notes", "inbox", "decisions", "meetings", "discussions", "ideas", "research", "facts", "followups", "references"]
     public static let work = ["backlog", "pullRequests", "architecture"]
 
     public static func decode(_ stored: String) -> [String] {

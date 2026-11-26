@@ -652,6 +652,8 @@ struct EntryActionBanner: View {
             DiscussionBanner(entry: entry)
         case .ideas:
             IdeaBanner(entry: entry)
+        case .notes:
+            NoteBanner(entry: entry)
         case .references:
             ReferenceBanner(entry: entry)
         case .meetings:

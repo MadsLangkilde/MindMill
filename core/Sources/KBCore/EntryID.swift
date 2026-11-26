@@ -1,7 +1,7 @@
 import Foundation
 
 public enum KBSection: String, CaseIterable, Hashable, Sendable, Identifiable {
-    case overview, decisions, meetings, facts, architecture, followups, backlog, discussions, ideas, research, references, inbox
+    case overview, decisions, meetings, facts, architecture, followups, backlog, discussions, ideas, research, references, notes, inbox
 
     public var id: String { rawValue }
 
@@ -18,6 +18,7 @@ public enum KBSection: String, CaseIterable, Hashable, Sendable, Identifiable {
         case .ideas: return "Ideas"
         case .research: return "Research"
         case .references: return "References"
+        case .notes: return "Notes"
         case .inbox: return "Inbox"
         }
     }
@@ -35,17 +36,18 @@ public enum KBSection: String, CaseIterable, Hashable, Sendable, Identifiable {
         case .ideas: return "Idea"
         case .research: return "Research"
         case .references: return "Reference"
+        case .notes: return "Note"
         case .inbox: return "Inbox Entry"
         }
     }
 
     /// Named `YYYY-MM-DD-slug` and sorted newest first. Inbox files use `YYYYMMDD-HHMMSS-slug`.
-    public var isDated: Bool { self == .decisions || self == .meetings || self == .followups || self == .backlog || self == .discussions || self == .ideas || self == .research || self == .references }
+    public var isDated: Bool { self == .decisions || self == .meetings || self == .followups || self == .backlog || self == .discussions || self == .ideas || self == .research || self == .references || self == .notes }
 
-    public static let folders: [KBSection] = [.decisions, .meetings, .facts, .architecture, .followups, .backlog, .discussions, .ideas, .research, .references, .inbox]
+    public static let folders: [KBSection] = [.decisions, .meetings, .facts, .architecture, .followups, .backlog, .discussions, .ideas, .research, .references, .notes, .inbox]
 
     /// Sections an inbox entry can be approved into.
-    public static let inboxTargets: [KBSection] = [.decisions, .facts, .architecture, .followups, .backlog]
+    public static let inboxTargets: [KBSection] = [.decisions, .facts, .architecture, .followups, .backlog, .ideas, .references, .notes]
 }
 
 /// `<project-id>/<section>/<file stem>`, or `<project-id>/overview` for a project's overview.md.

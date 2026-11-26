@@ -309,6 +309,11 @@ final class AppModel {
     var bulkCleanupRequest: BulkCleanupRequest?
     var newDiscussionRequest: NewDiscussionRequest?
     var newResearchRequest: NewResearchRequest?
+    var newNoteRequest: NewNoteRequest?
+    /// Bumped when the voice settings or key change, so what shows the engine in use updates.
+    var voiceRevision = 0
+    /// Bumped when skills, plugins or tools change.
+    var skillsRevision = 0
     var architectureTab: ArchitectureTab = .notes
     var projectDocs: [String: ProjectDocList] = [:]
     var projectDocsLoading: Set<String> = []
@@ -740,12 +745,14 @@ final class AppModel {
             if publish, wasDraft {
                 isEditing = false
                 notice = "Saved “\(doc.title)”."
-                if SharingStatus.sharedByDefault(doc.id.section), sharing.repos[doc.id.project]?.path != nil {
+                if SharingStatus.sharedByDefault(doc.id.section, chosen: ProjectSettings.load(project: doc.id.project, root: rootURL).sharing),
+                   sharing.repos[doc.id.project]?.path != nil {
                     setShared(doc.id, true, quiet: true)
                 }
             } else if sharingState(doc.id).isShared {
                 pushShared(doc.id)
             }
+            if publish { engine.suggestForNote(doc.id) }
             reload()
             return true
         } catch {

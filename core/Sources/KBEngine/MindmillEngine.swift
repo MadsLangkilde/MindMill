@@ -115,6 +115,19 @@ public final class MindmillEngine {
     @ObservationIgnored public let methods = RemoteMethods()
     public let remote: RemoteServer
 
+    /// The installed plugins and when they were read (`installedPlugins`).
+    @ObservationIgnored public var pluginCache: (at: Date, plugins: [AIExtensions.InstalledPlugin])?
+    /// Skills, plugins or tools changed (from the phone or the Mac); the host refreshes what it shows.
+    @ObservationIgnored public var onSkillsChanged: (() -> Void)?
+    /// An entry's sharing or a sharing default changed from the phone.
+    @ObservationIgnored public var onSharingChanged: (() -> Void)?
+    /// The voice settings or key changed (`watchVoiceSettings`).
+    @ObservationIgnored public var onVoiceChanged: (() -> Void)?
+    @ObservationIgnored var voiceSignatureSeen = ""
+    /// When each note last got background suggestions.
+    @ObservationIgnored var noteSuggestedAt: [String: Date] = [:]
+    @ObservationIgnored var voiceWatch: Timer?
+
     /// Called after every reload with whether the knowledge base loaded; the host refreshes what it derives from it.
     @ObservationIgnored public var onReload: [(Bool) -> Void] = []
     /// Something changed in the tracker (a work item was created or moved); the host refreshes its backlog.
@@ -194,6 +207,7 @@ public final class MindmillEngine {
         actions.onRun = { [weak self] name, channel, result in self?.forwardVoiceAction(name, channel, result) }
         registerMethods()
         registerVoiceMethods()
+        registerExtensionMethods()
         registerDesktopExtras()
         registerActions()
         registerBuildMethods()

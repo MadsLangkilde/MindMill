@@ -15,6 +15,17 @@ public final class RealtimeRelay {
         public let pcm: Data
     }
 
+    /// Tools of its own instead of the action layer's (live voice in a session).
+    public struct Tools {
+        public let definitions: [JSONValue]
+        public let run: (String, JSONValue) async -> String
+
+        public init(definitions: [JSONValue], run: @escaping (String, JSONValue) async -> String) {
+            self.definitions = definitions
+            self.run = run
+        }
+    }
+
     /// The rate audio leaves the relay at, for the Mac's player and the phone (`pcm24k`).
     public static let outRate: Double = 24000
     public static let inRate: Double = 16000
@@ -29,11 +40,14 @@ public final class RealtimeRelay {
     private var seq = 0
     private var closed = false
     private var assistantText = ""
+    private var userText = ""
     private var resumeHandle: String?
+    private let custom: Tools?
     private var settings: (model: String, key: String, voice: String, instructions: String)?
 
     public init(wire: RealtimeWire, conversation: VoiceConversation, layer: ActionLayer, askBrain: @escaping (String) async -> String,
-         audioOut: @escaping (Audio) -> Void, onFail: @escaping (VoiceFailure) -> Void) {
+         audioOut: @escaping (Audio) -> Void, onFail: @escaping (VoiceFailure) -> Void, tools: Tools? = nil) {
+        self.custom = tools
         self.wire = wire
         self.conversation = conversation
         self.layer = layer
@@ -48,7 +62,7 @@ public final class RealtimeRelay {
         t.maximumMessageSize = 16 << 20
         task = t
         t.resume()
-        let tools = RealtimeTools.definitions(layer.toolDefinitions(only: ActionCatalog.voiceCore))
+        let tools = custom?.definitions ?? RealtimeTools.definitions(layer.toolDefinitions(only: ActionCatalog.voiceCore))
         for m in wire.setup(model: model, instructions: instructions, voice: voice, tools: tools, resume: resumeHandle) { send(m) }
         receive()
     }
@@ -59,6 +73,12 @@ public final class RealtimeRelay {
     public func sendAudio(_ pcm: Data, rate: Double) {
         guard !closed, task != nil else { return }
         send(wire.audio(PCMResampler.resample(pcm, from: rate, to: wire.inputRate)))
+    }
+
+    /// A text turn for the model to answer out loud (the session's progress).
+    public func say(_ text: String) {
+        guard !closed, task != nil else { return }
+        for m in wire.text(text) { send(m) }
     }
 
     public func interrupt() {
@@ -111,6 +131,7 @@ public final class RealtimeRelay {
         case .ready:
             c.emit(.state(.listening))
         case .audio(let pcm):
+            finishUserTurn()
             seq += 1
             c.emit(.state(.speaking))
             audioOut(Audio(seq: seq, pcm: PCMResampler.resample(pcm, from: wire.outputRate, to: Self.outRate)))
@@ -120,21 +141,30 @@ public final class RealtimeRelay {
                 assistantText = ""
                 if !text.isEmpty { c.emit(.transcript(role: "assistant", text: text, final: true)) }
             } else {
+                finishUserTurn()
                 assistantText += t
-                c.emit(.transcript(role: "assistant", text: t, final: false))
+                c.emit(.transcript(role: "assistant", text: assistantText, final: false))
             }
         case .userTranscript(let t, let final):
-            c.emit(.transcript(role: "user", text: t, final: final))
+            if final {
+                userText = ""
+                c.emit(.transcript(role: "user", text: t, final: true))
+            } else {
+                userText += t
+                c.emit(.transcript(role: "user", text: userText, final: false))
+            }
         case .speechStarted:
             c.emit(.clear)
             c.emit(.state(.listening))
         case .responseDone:
+            finishUserTurn()
             if !assistantText.isEmpty {
                 c.emit(.transcript(role: "assistant", text: assistantText, final: true))
                 assistantText = ""
             }
             c.emit(.state(.listening))
         case .toolCall(let id, let name, let args):
+            finishUserTurn()
             c.emit(.state(.thinking))
             let output = await runTool(name, args)
             for m in wire.toolResult(id: id, name: name, output: output) { send(m) }
@@ -156,7 +186,16 @@ public final class RealtimeRelay {
         connect(model: s.model, key: s.key, voice: s.voice, instructions: s.instructions)
     }
 
+    /// A provider that sends the user's words in pieces (Gemini) never says they're final: they are once it answers.
+    private func finishUserTurn() {
+        guard !userText.isEmpty else { return }
+        let text = userText.trimmingCharacters(in: .whitespaces)
+        userText = ""
+        if !text.isEmpty { conversation?.emit(.transcript(role: "user", text: text, final: true)) }
+    }
+
     private func runTool(_ name: String, _ args: JSONValue) async -> String {
+        if let custom { return await custom.run(name, args) }
         switch name {
         case RealtimeTools.askBrain:
             return await askBrain(args["request"]?.string ?? "")

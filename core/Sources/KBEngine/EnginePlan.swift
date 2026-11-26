@@ -73,7 +73,7 @@ extension MindmillEngine {
     @discardableResult
     public func discussionSession(_ action: String, _ id: EntryID, display: String, show: Bool = true) -> WorkSession {
         let title = index.entry(id)?.title ?? id.stem
-        return sessions.newSession(title: "Discussion: \(title)", project: id.project, message: "/kb:discussion \(action) \(id.rawValue)",
+        return sessions.newSession(title: "Discussion: \(title)", project: id.project, message: "/mindmill:discussion \(action) \(id.rawValue)",
                                    display: "\(display): \(title)", about: "discussion:\(id.rawValue)", show: show)
     }
 
@@ -81,7 +81,7 @@ extension MindmillEngine {
     public func startDiscussion(project: String, lookFor: String, show: Bool = true) -> WorkSession? {
         let q = lookFor.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return nil }
-        return sessions.newSession(title: "New discussion", project: project, message: "/kb:discussion start \(project) \(q)",
+        return sessions.newSession(title: "New discussion", project: project, message: "/mindmill:discussion start \(project) \(q)",
                                    display: "Start a discussion from mail or Teams: \(q)", show: show)
     }
 
@@ -97,8 +97,75 @@ extension MindmillEngine {
     @discardableResult
     public func ideaSession(_ action: String, _ id: EntryID, display: String, show: Bool = true) -> WorkSession {
         let title = index.entry(id)?.title ?? id.stem
-        return sessions.newSession(title: "Idea: \(title)", project: id.project, message: "/kb:idea \(action) \(id.rawValue)",
+        return sessions.newSession(title: "Idea: \(title)", project: id.project, message: "/mindmill:idea \(action) \(id.rawValue)",
                                    display: "\(display): \(title)", about: "idea:\(id.rawValue)", show: show)
+    }
+
+    public static func noteKey(_ id: EntryID) -> String { "note:\(id.rawValue)" }
+
+    /// The note's own Plan session, where it is talked through and sorted.
+    public func noteSession(_ id: EntryID) -> WorkSession? {
+        sessions.loadIfNeeded()
+        return sessions.list.first { $0.about == Self.noteKey(id) }
+    }
+
+    /// Runs one of the mindmill:notes skill's actions on a note in its session, starting it the first time. `spoken`:
+    /// the user talks out loud, so replies are short and read aloud.
+    @discardableResult
+    public func noteSession(_ action: NoteAction, _ id: EntryID, spoken: Bool = false, show: Bool = true) -> WorkSession {
+        let title = index.entry(id)?.title ?? id.stem
+        let command = "/mindmill:notes \(action.rawValue) \(id.rawValue)"
+        let message = spoken ? SpokenReply.message(command) : command
+        let display = "\(action.display): \(title)"
+        if let s = noteSession(id) {
+            if s.archived == true { s.archived = nil }
+            sessions.send(message, in: s, display: display)
+            return s
+        }
+        return sessions.newSession(title: "Note: \(title)", project: id.project, message: message, display: display,
+                                   about: Self.noteKey(id), show: show)
+    }
+
+    /// Writes a note down; returns its id.
+    public func addNote(scope: String, text: String, title: String? = nil) async throws -> EntryID {
+        var args = ["note", "add", "--project", scope, "--text", text]
+        if let t = title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { args += ["--title", t] }
+        let out = try await cli.run(args)
+        guard let line = out.components(separatedBy: .newlines).first, let id = EntryID(line) else {
+            throw ActionError("kb note add didn't say what it made: \(out)")
+        }
+        reload()
+        suggestForNote(id)
+        return id
+    }
+
+    /// After a note is written or changed: the background model suggests where its clear parts belong, as inbox
+    /// entries shown on the note, at most every two minutes per note.
+    public func suggestForNote(_ id: EntryID) {
+        guard id.section == .notes, claudeExecutable != nil else { return }
+        if let last = noteSuggestedAt[id.rawValue], Date().timeIntervalSince(last) < 120 { return }
+        noteSuggestedAt[id.rawValue] = Date()
+        let waiting = suggestions(from: [id.rawValue]).map { "- \($0.proposedSection?.rawValue ?? ""): \($0.title)" }.joined(separator: "\n")
+        let prompt = """
+        The user just wrote or changed their note `\(id.rawValue)`. Read it with `kb show \(id.rawValue)`. For each part of it that \
+        clearly belongs somewhere in their knowledge base (a fact, a decision, an idea, a follow-up, a reference, an architecture \
+        note), check with `kb search "<a few words>"` that it isn't there yet, then suggest it: `kb inbox add --project \(id.project) \
+        --cross-project --section <facts|decisions|ideas|followups|references|architecture> --proposed-by \(id.rawValue) --source \
+        \(id.rawValue) --title "<it as a statement>" --summary "<one line>" --reason "From your note" --body "<the details>"`. \
+        At most three, only clear ones; nothing when nothing fits. Already suggested, don't repeat:
+        \(waiting.isEmpty ? "(none)" : waiting)
+        Reply with one line: how many you suggested.
+        """
+        Task {
+            _ = await claudeOnce(prompt, system: "You sort the user's notes into their knowledge base by suggesting entries; you never write entries directly.",
+                                 model: model(for: .background), tools: ["Bash(kb:*)"], timeout: 240)
+            reload()
+        }
+    }
+
+    public func setNote(_ id: EntryID, status: NoteStatus) async throws {
+        defer { reload() }
+        try await cli.run(["note", "status", id.rawValue, status.rawValue])
     }
 
     public func setIdea(_ id: EntryID, status: IdeaStatus) async throws {
@@ -150,7 +217,7 @@ extension MindmillEngine {
         let t = researchTitle(title: title, question: q, target: target)
         guard !t.isEmpty else { throw ActionError("What should it research?") }
         let id = try await createResearch(scope: scope, title: t, question: q, target: target)
-        let s = startResearchSession(id, message: "/kb:research start \(id.rawValue)", display: "Research: \(t)")
+        let s = startResearchSession(id, message: "/mindmill:research start \(id.rawValue)", display: "Research: \(t)")
         return (id, s)
     }
 
@@ -165,7 +232,7 @@ extension MindmillEngine {
     /// waits for the current reply.
     @discardableResult
     public func researchAction(_ action: String, _ id: EntryID, display: String) -> String? {
-        let message = "/kb:research \(action) \(id.rawValue)"
+        let message = "/mindmill:research \(action) \(id.rawValue)"
         guard let s = researchSession(id) else {
             startResearchSession(id, message: message, display: display)
             return nil
@@ -208,7 +275,7 @@ extension MindmillEngine {
         let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
         let action = kind == .teams ? "teams" : "email"
         return sessions.newSession(title: "Save \(kind.title.lowercased())", project: project,
-                                   message: "/kb:reference \(action) \(project) \(q)" + (n.isEmpty ? "" : "\n\nWhy it matters: \(n)"),
+                                   message: "/mindmill:reference \(action) \(project) \(q)" + (n.isEmpty ? "" : "\n\nWhy it matters: \(n)"),
                                    display: "Save \(kind == .teams ? "a Teams chat" : "an email") to References: \(q)", show: show)
     }
 
@@ -314,7 +381,7 @@ extension MindmillEngine {
     public func prepareMeeting(_ id: EntryID, show: Bool = true) -> WorkSession {
         let title = index.entry(id)?.title ?? id.stem
         return sessions.newSession(title: "Prepare: \(title)", project: id.project,
-                                   message: "/kb:prep \(id.rawValue)", display: "Prepare “\(title)”", show: show, space: .plan)
+                                   message: "/mindmill:prep \(id.rawValue)", display: "Prepare “\(title)”", show: show, space: .plan)
     }
 
     // MARK: Actions
@@ -491,6 +558,29 @@ extension MindmillEngine {
             guard let into = p["into"]?.string.flatMap(IdeaOutcome.init(rawValue:)) else { throw ActionError("Into what?") }
             ideaSession("turn \(into.rawValue)", id, display: "Turn it into \(into.title.lowercased())", show: false)
             return ActionResult("Turning it into a \(into.rawValue) in a session.")
+        }
+
+        a.register("note.add") { [unowned self] p in
+            guard let text = p["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ActionError("What should the note say?") }
+            let id = try await addNote(scope: try scopeParam(p), text: text, title: p["title"]?.string)
+            return ActionResult("Noted.", data: ["id": .string(id.rawValue)])
+        }
+
+        a.register("note.discuss") { [unowned self] p in
+            let s = noteSession(.discuss, try entryParam(p), spoken: p["spoken"]?.bool == true, show: false)
+            return ActionResult("Talking it through in its session.", data: ["session": .string(s.id)])
+        }
+
+        a.register("note.sort") { [unowned self] p in
+            let s = noteSession(.sort, try entryParam(p), show: false)
+            return ActionResult("Sorting it in its session; the suggestions show on the note.", data: ["session": .string(s.id)])
+        }
+
+        a.register("note.status") { [unowned self] p in
+            let id = try entryParam(p)
+            guard let s = p["status"]?.string.flatMap(NoteStatus.init(rawValue:)) else { throw ActionError("Which status?") }
+            try await setNote(id, status: s)
+            return ActionResult(s == .filed ? "Marked as filed." : "Open again.")
         }
 
         a.register("idea.brainstorm") { [unowned self] p in

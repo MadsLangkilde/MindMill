@@ -166,6 +166,16 @@ public enum ActionCatalog {
                 entryID, ActionParam("into", "What it becomes", required: true, choices: IdeaOutcome.allCases.map(\.rawValue)),
             ]),
             ActionSpec("idea.brainstorm", "Brainstorm on an idea in a session.", risk: .write, params: [entryID]),
+            ActionSpec("note.add", "Write a note down: a thought that doesn't belong anywhere yet.", risk: .write, params: [
+                ActionParam("text", "What to note", required: true), ActionParam("title", "A short title"), scope,
+            ]),
+            ActionSpec("note.discuss", "Talk a note through in its session: it sums it up, checks with the user and suggests where things belong.", risk: .write, params: [
+                entryID, ActionParam("spoken", .boolean, "The user talks out loud"),
+            ]),
+            ActionSpec("note.sort", "Suggest where each part of a note belongs (facts, decisions, ideas, follow-ups…).", risk: .write, params: [entryID]),
+            ActionSpec("note.status", "Set a note's status.", risk: .write, params: [
+                entryID, ActionParam("status", "New status", required: true, choices: NoteStatus.allCases.map(\.rawValue)),
+            ]),
             ActionSpec("research.start", "Start researching a question.", risk: .write, params: [
                 ActionParam("question", "What to find out", required: true), ActionParam("title", "A short title"),
                 ActionParam("work_item", .integer, "A work item it is for"), ActionParam("entry", "An entry it is for"), scope,

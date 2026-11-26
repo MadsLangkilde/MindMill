@@ -1545,6 +1545,66 @@ class SplitLayoutTest(KbTestCase):
         self.assertIn(str(self.repo_a / "knowledgebase"), show)
 
 
+    def test_sharing_defaults_per_kind(self):
+        dest = self.migrate()
+        team = self.repo_a / "knowledgebase"
+        defaults = json.loads(self.cli("share", "defaults", "--scope", "app-a", "--json").stdout)
+        self.assertEqual(defaults["defaults"]["facts"], "shared")
+        self.assertEqual(defaults["defaults"]["notes"], "private")
+        self.assertEqual(self.cli("share", "default", "facts", "private", "--scope", "app-a").returncode, 0)
+        self.cli("new", "fact", "--title", "Private fact")
+        self.assertFalse(list((team / "facts").glob("*private-fact.md")))
+        self.assertTrue(list((dest / "app-a" / "facts").glob("*private-fact.md")))
+
+        self.cli("new", "idea", "--title", "Later")
+        r = self.cli("share", "default", "ideas", "shared", "--scope", "app-a", "--apply", "--json")
+        self.assertEqual(json.loads(r.stdout)["changed"], 1, r.stderr)
+        self.assertTrue(list((team / "ideas").glob("*later.md")))
+        self.assertEqual(json.loads(self.cli("share", "default", "decisions", "private", "--scope", "app-a",
+                                             "--apply", "--json").stdout)["changed"], 1)
+        self.assertFalse(list((team / "decisions").glob("*.md")))
+        self.assertTrue(list((dest / "app-a" / "decisions").glob("*use-room.md")))
+
+    def test_notes_stay_private_and_approved_suggestions_follow_the_defaults(self):
+        dest = self.migrate()
+        team = self.repo_a / "knowledgebase"
+        nid = self.cli("note", "add", "--text", "The login token expires after an hour\nmaybe cache it").stdout.split()[0]
+        self.assertTrue(nid.startswith("app-a/notes/"), nid)
+        self.assertFalse((team / "notes").exists())
+        note = kb.find_entry(dest, nid)
+        self.assertEqual(note.title, "The login token expires after an hour")
+        self.assertEqual(note.status, "open")
+        self.cli("note", "add", "--to", nid, "--text", "ask Kim")
+        self.cli("note", "summary", nid, "--text", "Token lifetime is an hour; caching is an idea.")
+        self.cli("note", "filed", nid, "--text", "facts: Login token lifetime")
+        note = kb.find_entry(dest, nid)
+        self.assertIn("ask Kim", note.body)
+        self.assertEqual(note.summary, "Token lifetime is an hour; caching is an idea.")
+        self.assertIn("- facts: Login token lifetime", note.body)
+        self.assertIn(nid, self.cli("note", "list").stdout)
+        self.cli("note", "status", nid, "filed")
+        self.assertNotIn(nid, self.cli("note", "list").stdout)
+
+        idea = self.cli("inbox", "add", "--section", "ideas", "--title", "Cache the token", "--proposed-by", nid,
+                        "--source", nid).stdout.split()[0]
+        fact = self.cli("inbox", "add", "--section", "facts", "--title", "Login token lives an hour",
+                        "--proposed-by", nid).stdout.split()[0]
+        self.assertTrue(self.cli("inbox", "approve", idea).stdout.startswith("app-a/ideas/"))
+        self.assertTrue(self.cli("inbox", "approve", fact).stdout.startswith("app-a/facts/"))
+        self.assertFalse((team / "ideas").exists())
+        self.assertTrue(list((team / "facts").glob("*login-token-lives-an-hour.md")))
+
+    def test_context_lists_notes_ideas_and_research(self):
+        self.migrate()
+        self.cli("note", "add", "--text", "Ship on Fridays?")
+        self.cli("new", "idea", "--title", "Dark mode")
+        self.cli("new", "research", "--title", "Which map SDK")
+        ctx = self.cli("context").stdout
+        self.assertIn("Ship on Fridays?", ctx)
+        self.assertIn("Dark mode", ctx)
+        self.assertIn("Which map SDK", ctx)
+        self.assertIn("kb inbox add --section <facts|decisions|ideas", ctx)
+
     def test_session_in_a_worktree_writes_to_its_own_checkout(self):
         self.migrate()
         g = lambda *a, cwd=self.repo_a: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, check=True)
