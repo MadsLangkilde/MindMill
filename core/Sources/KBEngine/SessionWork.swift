@@ -24,7 +24,11 @@ extension SessionHub {
     public func readyPRs(_ s: WorkSession) -> [(pr: PullRequest, session: WorkSession)] {
         let from = s.role == .lead ? [s] + members(of: s) : [s]
         var seen = Set<Int>()
-        return from.flatMap { m in linkedPRs(m).map { (pr: $0, session: m) } }
+        // A pull request in another repository belongs to the session working in that repository.
+        func owner(_ pr: PullRequest, _ found: WorkSession) -> WorkSession {
+            from.first { $0.workingDirectory.lastPathComponent.caseInsensitiveCompare(pr.repo) == .orderedSame } ?? found
+        }
+        return from.flatMap { m in linkedPRs(m).map { (pr: $0, session: owner($0, m)) } }
             .filter { $0.pr.canComplete && !$0.pr.draft && seen.insert($0.pr.id).inserted }
     }
 

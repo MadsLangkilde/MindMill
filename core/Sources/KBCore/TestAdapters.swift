@@ -37,6 +37,9 @@ public struct TestEnvironmentFacts: Codable, Equatable, Sendable {
     public var lanIP: String?
     /// Code-signing identities by name ("Apple Development: …", "Apple Distribution: …").
     public var signingIdentities: [String] = []
+    /// An Apple account is signed in to Xcode, so a build with `-allowProvisioningUpdates` makes its own certificate
+    /// and profile. Nil when not looked at.
+    public var xcodeAccount: Bool?
     /// An App Store Connect API key (.p8) on this Mac.
     public var appStoreConnectKey = false
     /// The Mindmill app on a phone is connected right now.
@@ -75,7 +78,8 @@ public struct TestEnvironmentFacts: Codable, Equatable, Sendable {
 
     /// Changes when something that matters for the compatibility check changes.
     public var fingerprint: String {
-        ([os, osVersion, arch] + toolchains.keys.sorted().map { "\($0)=\(toolchains[$0] ?? "")" }).joined(separator: "|")
+        ([os, osVersion, arch] + toolchains.keys.sorted().map { "\($0)=\(toolchains[$0] ?? "")" }
+            + ["signing=\(signingIdentities.count)", "account=\(xcodeAccount.map(String.init) ?? "")"]).joined(separator: "|")
     }
 
     /// The facts as lines for the AI.
@@ -86,6 +90,7 @@ public struct TestEnvironmentFacts: Codable, Equatable, Sendable {
         lines.append("Devices and emulators: " + (devices.isEmpty ? "none found" :
             devices.map { "\($0.name) (\($0.kind.rawValue)\($0.paired ? "" : ", not paired")\($0.booted ? ", running" : ""))" }.joined(separator: "; ")))
         lines.append("Code-signing identities: \(signingIdentities.isEmpty ? "none" : signingIdentities.joined(separator: "; "))")
+        if let xcodeAccount { lines.append("Apple account signed in to Xcode: \(xcodeAccount ? "yes (builds create their own development certificate)" : "no")") }
         lines.append("App Store Connect API key on this Mac: \(appStoreConnectKey ? "yes" : "no")")
         lines.append("Tailscale: \(tailscaleRunning ? "running\(tailscaleName.map { " as \($0)" } ?? "")\(tailscaleHTTPS ? ", HTTPS certificates on" : "")" : "not running")")
         lines.append("Companion phone app: \(companionConnected ? "connected" : companionPaired ? "paired, not connected now" : "not paired")"
@@ -331,8 +336,10 @@ public struct IOSTestAdapter: TestAdapter {
                                        help: ["Connect the iPhone with a cable and unlock it.", "On the iPhone: tap Trust This Computer.",
                                               "In Xcode: Window → Devices and Simulators → select the iPhone → Connect via network.",
                                               "On the iPhone: Settings → Privacy & Security → Developer Mode → On, then restart it."]))
-            items.append(ChecklistItem(id: "signing", title: "A development signing certificate", status: development ? .ok : .missing,
-                                       help: ["In Xcode: Settings → Accounts → add your Apple ID → Manage Certificates → + Apple Development."]))
+            items.append(ChecklistItem(id: "signing", title: development ? "A development signing certificate" : "Your Apple account in Xcode",
+                                       status: development || c.facts.xcodeAccount == true ? .ok : .missing,
+                                       help: ["Open Xcode → Settings → Accounts → + → Apple Account, and sign in (a free account works).",
+                                              "That's all: the first build makes the signing certificate and installs it."]))
         case "link":
             items.append(ChecklistItem(id: "signing", title: "A distribution signing certificate", status: distribution ? .ok : .missing,
                                        help: ["In Xcode: Settings → Accounts → Manage Certificates → + Apple Distribution."]))

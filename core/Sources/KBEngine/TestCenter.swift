@@ -17,8 +17,12 @@ public final class TestCenter {
     public var working: [String: String] = [:]
     public var deliveries: [TestDelivery] = []
     public var cards: [TestReviewCard] = []
-    /// The scope the Test view shows, and a type to put first when a prompt opened it.
-    public var selectedScope: String?
+    /// The scope the Test view shows, and a type to put first when a prompt opened it. Remembered across launches;
+    /// Test shows it again only while it is one of the open scope's choices (`TestScopes.pick`).
+    public var selectedScope: String? = UserDefaults.standard.string(forKey: TestCenter.selectedScopeKey) {
+        didSet { UserDefaults.standard.set(selectedScope, forKey: Self.selectedScopeKey) }
+    }
+    public static let selectedScopeKey = "testSelectedScope"
     public var preselectType: ProjectType?
     /// Last output per target, for the "Last run" log under More options.
     public var logs: [String: String] = [:]
@@ -55,7 +59,16 @@ public final class TestCenter {
     public func editTarget(_ scope: String, _ id: String, _ change: (inout TestTarget) -> Void) {
         edit(scope) { plan in
             if let i = plan.targets.firstIndex(where: { $0.id == id }) { change(&plan.targets[i]) }
+            if let i = plan.modules.firstIndex(where: { $0.id == id }) { change(&plan.modules[i]) }
         }
+    }
+
+    /// Each delivery's build and test output, in its folder.
+    public static let logFile = "log.txt"
+
+    /// A delivery's saved output, when it has one.
+    public func log(_ deliveryID: String) -> String? {
+        try? String(contentsOf: root.appendingPathComponent(deliveryID).appendingPathComponent(Self.logFile), encoding: .utf8)
     }
 
     public func folder(_ id: String) -> URL {
@@ -160,25 +173,38 @@ public enum TestShell {
             p.standardError = pipe
             p.standardInput = FileHandle.nullDevice
             let buffer = OutputBuffer()
-            pipe.fileHandleForReading.readabilityHandler = { h in buffer.append(h.availableData) }
+            pipe.fileHandleForReading.readabilityHandler = { h in
+                let d = h.availableData
+                if d.isEmpty { h.readabilityHandler = nil; buffer.end() } else { buffer.append(d) }
+            }
             do { try p.run() } catch { return Result(code: -1, output: error.localizedDescription) }
+            // Polls instead of `waitUntilExit`, which can hang off the main thread after the process is gone, and
+            // never reads to the end of the pipe, which a daemon the command started (adb, Gradle) keeps open.
             let deadline = Date().addingTimeInterval(timeout)
             while p.isRunning && Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
             var timedOut = false
-            if p.isRunning { p.terminate(); timedOut = true }
-            p.waitUntilExit()
+            if p.isRunning {
+                p.terminate()
+                timedOut = true
+                let grace = Date().addingTimeInterval(3)
+                while p.isRunning && Date() < grace { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+            let drained = Date().addingTimeInterval(0.5)
+            while !buffer.ended && Date() < drained { try? await Task.sleep(for: .milliseconds(20)) }
             pipe.fileHandleForReading.readabilityHandler = nil
-            buffer.append(pipe.fileHandleForReading.readDataToEndOfFile())
             var out = buffer.text
             if timedOut { out += "\n[Stopped after \(Int(timeout)) seconds]" }
-            return Result(code: timedOut ? -2 : p.terminationStatus, output: out)
+            return Result(code: timedOut ? -2 : p.isRunning ? -3 : p.terminationStatus, output: out)
         }.value
     }
 
     final class OutputBuffer: @unchecked Sendable {
         private var data = Data()
         private let lock = NSLock()
+        private var finished = false
         func append(_ d: Data) { lock.withLock { data.append(d) } }
+        func end() { lock.withLock { finished = true } }
+        var ended: Bool { lock.withLock { finished } }
         var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
     }
 

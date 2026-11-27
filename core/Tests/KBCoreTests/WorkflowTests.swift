@@ -946,6 +946,10 @@ struct BuildModeTests {
         #expect(CrewOrder.parse(Data(start.utf8)) == .start(.init(title: "Tests", parent: "lead1", project: "p", model: "haiku", text: "Write tests", from: "lead1")))
         #expect(CrewOrder.parse(Data(#"{"kind":"stop","to":"x"}"#.utf8)) == .stop(to: "x", from: "cli"))
         #expect(CrewOrder.parse(Data(#"{"kind":"archive","to":"x","from":"x"}"#.utf8)) == .archive(to: "x", from: "x"))
+        #expect(CrewOrder.parse(Data(#"{"kind":"link","to":"x","about":"wi:12","from":"x"}"#.utf8)) == .link(to: "x", about: "wi:12", from: "x"))
+        #expect(CrewOrder.parse(Data(#"{"kind":"link","to":"x","about":"mypr:7"}"#.utf8)) == .link(to: "x", about: "mypr:7", from: "cli"))
+        #expect(CrewOrder.parse(Data(#"{"kind":"link","to":"x","about":"pr:7"}"#.utf8)) == nil)
+        #expect(CrewOrder.parse(Data(#"{"kind":"link","to":"x","about":"wi:abc"}"#.utf8)) == nil)
         #expect((CrewOrder.parse(Data(#"{"kind":"send","to":"x"}"#.utf8))) == nil)
         #expect((CrewOrder.parse(Data("not json".utf8))) == nil)
     }

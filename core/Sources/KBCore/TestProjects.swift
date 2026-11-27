@@ -108,19 +108,31 @@ public struct DetectedTarget: Equatable, Sendable, Codable {
     /// A command found in the project, e.g. `npm run dev` or `./gradlew assembleDebug`.
     public var startCommand: String?
     public var testCommand: String?
+    public var buildCommand: String?
+    /// A module of an app (a Swift package beside an Xcode app, a Gradle module): the app's folder. Built and
+    /// tested on its own, never delivered.
+    public var partOf: String?
+    /// A module's name, e.g. `AsyncBleManager` or `:data:network`.
+    public var name: String?
 
-    public init(type: ProjectType, path: String, evidence: String, startCommand: String? = nil, testCommand: String? = nil) {
+    public init(type: ProjectType, path: String, evidence: String, startCommand: String? = nil, testCommand: String? = nil,
+                buildCommand: String? = nil, partOf: String? = nil, name: String? = nil) {
         self.type = type
         self.path = path
         self.evidence = evidence
         self.startCommand = startCommand
         self.testCommand = testCommand
+        self.buildCommand = buildCommand
+        self.partOf = partOf
+        self.name = name
     }
 }
 
 /// Tells from a repository's files what it builds. A repository can hold several targets (an app and its backend);
 /// each folder is looked at on its own and a folder inside one already found for the same type is skipped.
 public enum ProjectDetector {
+    static let swiftPackageForIOS = "Swift package for iOS"
+
     public static func detect(_ listing: RepoListing) -> [DetectedTarget] {
         var dirs: Set<String> = [""]
         for p in listing.paths {
@@ -129,17 +141,68 @@ public enum ProjectDetector {
             if parts.count > 2 { dirs.insert(parts[0] + "/" + parts[1]) }
         }
         var found: [DetectedTarget] = []
+        var modules: [DetectedTarget] = []
         for dir in dirs.sorted(by: { ($0.split(separator: "/").count, $0) < ($1.split(separator: "/").count, $1) }) {
             for t in detect(in: dir, listing) {
+                if t.partOf != nil {
+                    if !modules.contains(where: { $0.path == t.path && $0.type == t.type }) { modules.append(t) }
+                    continue
+                }
                 let covered = found.contains { f in
                     f.type == t.type && (f.path.isEmpty || t.path == f.path || t.path.hasPrefix(f.path + "/"))
                 }
                 if !covered { found.append(t) }
             }
         }
+        // Swift packages beside an Xcode app are its modules: listed under the app, not as apps of their own.
+        if let app = found.first(where: { $0.type == .ios && $0.evidence.hasPrefix("Xcode project") }) {
+            for package in found where package.type == .ios && package.evidence == swiftPackageForIOS {
+                modules.append(iosModule(package, app: app, listing))
+            }
+            found.removeAll { $0.type == .ios && $0.evidence == swiftPackageForIOS }
+        }
+        found += modules.filter { m in found.contains { $0.type == m.type && $0.path == m.partOf } }
         let known = found.filter { $0.type != .unknown }
         return known.isEmpty ? [DetectedTarget(type: .unknown, path: "", evidence: "Nothing recognisable")] : known
     }
+
+    /// A Swift package beside an iOS app, built and tested in the iOS Simulator with its own scheme.
+    static func iosModule(_ package: DetectedTarget, app: DetectedTarget, _ listing: RepoListing) -> DetectedTarget {
+        let manifest = listing.read(package.path.isEmpty ? "Package.swift" : package.path + "/Package.swift") ?? ""
+        let name = packageName(manifest) ?? package.path.split(separator: "/").last.map(String.init) ?? package.path
+        let scheme = "-scheme \(shellQuote(name))"
+        let simulator = "SIM=$(xcrun simctl list devices available | awk -F'[()]' '/iPhone/{print $2; exit}'); "
+        return DetectedTarget(type: .ios, path: package.path, evidence: "Swift package of the app",
+                              testCommand: simulator + "xcodebuild test \(scheme) -destination \"platform=iOS Simulator,id=$SIM\"",
+                              buildCommand: "xcodebuild build \(scheme) -destination 'generic/platform=iOS Simulator'",
+                              partOf: app.path, name: name)
+    }
+
+    /// `name:` of a Package.swift's `Package(…)`.
+    static func packageName(_ manifest: String) -> String? {
+        guard let range = manifest.range(of: "Package("),
+              let re = try? NSRegularExpression(pattern: #"name:\s*"([^"]+)""#) else { return nil }
+        let rest = String(manifest[range.upperBound...])
+        guard let m = re.firstMatch(in: rest, range: NSRange(rest.startIndex..., in: rest)),
+              let r = Range(m.range(at: 1), in: rest) else { return nil }
+        return String(rest[r])
+    }
+
+    /// The Gradle modules a settings file includes (`include(":data:network")`), as their paths (`:data:network`).
+    static func gradleIncludes(_ settings: String) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: #"["'](:[A-Za-z0-9_.\-:]+)["']"#) else { return [] }
+        var out: [String] = []
+        for line in settings.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("include(") || trimmed.hasPrefix("include ") || trimmed.hasPrefix("include\"") else { continue }
+            for m in re.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+                if let r = Range(m.range(at: 1), in: trimmed), !out.contains(String(trimmed[r])) { out.append(String(trimmed[r])) }
+            }
+        }
+        return out
+    }
+
+    public static func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
     /// The files directly in a folder and up to two levels below it, relative to it.
     static func files(in dir: String, _ listing: RepoListing, depth: Int = 3) -> [String] {
@@ -173,7 +236,7 @@ public enum ProjectDetector {
         if has("Package.swift") {
             let text = read("Package.swift")
             if text.contains(".iOS(") && !out.contains(where: { $0.type == .ios }) {
-                out.append(DetectedTarget(type: .ios, path: dir, evidence: "Swift package for iOS", testCommand: "swift test"))
+                out.append(DetectedTarget(type: .ios, path: dir, evidence: swiftPackageForIOS, testCommand: "swift test"))
             }
             if text.contains(".executableTarget") && text.contains(".macOS(") && !out.contains(where: { $0.type == .desktopMac }) {
                 out.append(DetectedTarget(type: .desktopMac, path: dir, evidence: "Swift package with a macOS app", startCommand: "swift run", testCommand: "swift test"))
@@ -187,6 +250,19 @@ public enum ProjectDetector {
             let wrapper = has("gradlew") ? "./gradlew" : "gradle"
             out.append(DetectedTarget(type: .android, path: dir, evidence: "Android Gradle project",
                                       startCommand: "\(wrapper) assembleDebug", testCommand: "\(wrapper) testDebugUnitTest"))
+            let settings = has("settings.gradle.kts") ? read("settings.gradle.kts") : read("settings.gradle")
+            for module in gradleIncludes(settings) {
+                let folder = module.dropFirst().replacingOccurrences(of: ":", with: "/")
+                let script = [folder + "/build.gradle.kts", folder + "/build.gradle"].first { listing.read(prefix + $0) != nil }
+                let build = script.flatMap { listing.read(prefix + $0) } ?? ""
+                let plugins = build.range(of: "plugins").map { String(build[$0.upperBound...].prefix { $0 != "}" }) } ?? ""
+                if plugins.contains("application") || build.contains("applicationId") { continue }
+                let android = build.contains("android")
+                out.append(DetectedTarget(type: .android, path: prefix + folder, evidence: "Gradle module of the app",
+                                          testCommand: "\(wrapper) \(module):\(android ? "testDebugUnitTest" : "test")",
+                                          buildCommand: "\(wrapper) \(module):\(android ? "assembleDebug" : "assemble")",
+                                          partOf: dir, name: module))
+            }
         }
 
         // JavaScript: a front end, a back end, or an Electron desktop app.

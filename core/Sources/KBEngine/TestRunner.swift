@@ -48,6 +48,8 @@ public protocol TestPlatform: AnyObject {
 /// deliveries to the phone with review cards. `TestCenter` holds the state; this does the work.
 @MainActor
 public final class TestRunner {
+    /// The look at this machine under way, which a second caller waits for instead of going on without it.
+    private var gatherTask: Task<Void, Never>?
     /// Kinds only a Mac can build.
     public static let appleKinds: Set<DeliveryKind> = [.iosDevice, .iosLink, .testflight]
 
@@ -104,7 +106,14 @@ public final class TestRunner {
 
     /// Looks at the toolchains, devices and network. Takes a few seconds; runs in the background.
     public func gatherFacts() async {
-        guard !center.gathering else { return }
+        if let running = gatherTask { return await running.value }
+        let task = Task { await gatherNow() }
+        gatherTask = task
+        await task.value
+        gatherTask = nil
+    }
+
+    private func gatherNow() async {
         center.gathering = true
         defer { center.gathering = false }
         let env = environment
@@ -203,6 +212,41 @@ public final class TestRunner {
         center.edit(scope) { $0.merge(detected: detected) }
     }
 
+    /// Builds a module and runs its tests, on this machine only; the result stays on the module.
+    public func runModule(_ scope: String, _ id: String, session: String? = nil) async {
+        guard var m = center.store[scope].modules.first(where: { $0.id == id }), center.working[id] == nil else { return }
+        // Gradle runs a module from the app's root (`./gradlew :data:network:test`); a Swift package from its own folder.
+        var app = center.store[scope].targets.first { $0.id == m.partOf }
+        if let copy = await sessionCopy(session, repo: m.repo) {
+            m.repo = copy.path
+            app?.repo = copy.path
+        }
+        let cwd = m.type == .android ? app.map(directory) ?? directory(m) : directory(m)
+        let env = environment
+        var log = ""
+        func run(_ cmd: String) async -> TestShell.Result {
+            let r = await TestShell.run(cmd, cwd: cwd, environment: env, timeout: 1800)
+            log += "$ \(cmd)\n\(r.output)\n"
+            return r
+        }
+        defer {
+            center.working[id] = nil
+            center.logs[id] = String(log.suffix(60000))
+        }
+        var result = ModuleRun(built: true, tests: nil)
+        if let build = m.buildCommand, !build.isEmpty {
+            center.working[id] = "Building \(m.title)…"
+            result.built = await run(build).code == 0
+        }
+        if result.built, let test = m.testCommand, !test.isEmpty {
+            center.working[id] = "Testing \(m.title)…"
+            let r = await run(test)
+            result.tests = TestRunSummary.parse(r.output, exitCode: r.code)
+        }
+        result.at = Date()
+        center.editTarget(scope, id) { $0.lastRun = result }
+    }
+
     public func directory(_ t: TestTarget) -> URL {
         let repo = URL(fileURLWithPath: t.repo)
         return t.path.isEmpty ? repo : repo.appendingPathComponent(t.path)
@@ -280,8 +324,8 @@ public final class TestRunner {
     /// A project was opened or set up: detect its targets, and check compatibility when they or this machine changed.
     public func projectOpened(_ scope: String) {
         Task {
-            if center.facts.gathered == nil { await gatherFacts() }
             detectTargets(scope)
+            if center.facts.gathered == nil { await gatherFacts() }
             await runCompatibilityCheck(scope)
         }
     }
@@ -311,6 +355,7 @@ public final class TestRunner {
             let how = plan.targets.compactMap { t in t.method.flatMap { t.adapter.method($0) }.map { "\(t.title): \($0.title)" } }
             parts.append("Testing is set up in Mindmill (\(how.joined(separator: "; "))); builds are delivered to the user's phone at checkpoints, so don't set that up yourself. To suggest a change to the test set-up, run `kb test suggest --scope \(scope) --text '<what and why>'`.")
         }
+        parts.append("When the user asks to test or try what you built, run `kb test deliver` (`--target <name>` for one app): Mindmill builds your version, from your own copy of the code, and sends it to them as the project's testing says. Don't build or install it for them yourself. When you work in a separate copy of the code (a git worktree), tell Mindmill once with `kb crew folder me <its path>`.")
         return parts.isEmpty ? "" : "\n" + parts.joined(separator: "\n")
     }
 
@@ -358,14 +403,72 @@ public final class TestRunner {
 
     // MARK: Delivering
 
+    /// `kb test deliver` from a session: build what it made, from its own copy, and deliver it as the scope's testing
+    /// says; when testing isn't set up yet, the session offers to set it up. `{"kind": "test_deliver", "session",
+    /// "scope"?, "target"?}`.
+    public func deliveryRequested(_ data: Data) -> Bool {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], obj["kind"] as? String == "test_deliver",
+              let s = engine.sessions.session(obj["session"] as? String) else { return false }
+        guard let scope = (obj["scope"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) ?? s.project else { return true }
+        let plan = center.store[scope]
+        if plan.targets.isEmpty { detectTargets(scope) }
+        let wanted = (obj["target"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let targets = center.store[scope].targets.filter { wanted == nil || $0.id == wanted || $0.title.caseInsensitiveCompare(wanted ?? "") == .orderedSame }
+        let ready = targets.filter(ready)
+        guard !ready.isEmpty else {
+            onAskToSetUp?(s)
+            engine.sessions.deliverNote("Testing isn't set up for this project yet, so nothing was built. The user sees an offer to set it up under this session; tell them in one line.", to: s)
+            return true
+        }
+        engine.report("Building \(ready.map(\.title).joined(separator: ", ")) from “\(s.title)” to test…")
+        for t in ready { Task { await deliver(scope: scope, targetID: t.id, session: s.id) } }
+        return true
+    }
+
+    /// The separate copy of `repo` a session works in; nil when it has none and works in the project's own folder.
+    public func sessionCopy(_ sessionID: String?, repo: String) async -> TestSources.Checkout? {
+        guard let s = engine.sessions.session(sessionID) else { return nil }
+        let r = await TestShell.run("git -C \(ProjectDetector.shellQuote(repo)) worktree list --porcelain", environment: environment, timeout: 20)
+        guard r.code == 0 else { return nil }
+        let texts = s.chat.items.filter { $0.role == .tool || $0.role == .assistant }.suffix(400).map(\.text)
+        return TestSources.sessionCopy(TestSources.checkouts(porcelain: r.output), reported: s.folders, texts: texts)
+    }
+
+    /// The branch the project's own folder is on, for "This Mac's version (main)".
+    public func localBranch(_ scope: String) async -> String? {
+        guard let repo = center.store[scope].targets.first?.repo else { return nil }
+        let r = await TestShell.run("git -C \(ProjectDetector.shellQuote(repo)) branch --show-current", environment: environment, timeout: 10)
+        let b = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return r.code == 0 && !b.isEmpty ? b : nil
+    }
+
+    /// The sessions with their own copy of one of the scope's repositories, for "Build from" under Test.
+    public func sessionsWithCopies(_ scope: String) async -> [(session: WorkSession, branch: String?)] {
+        let repos = Set(center.store[scope].targets.map(\.repo))
+        var out: [(WorkSession, String?)] = []
+        for s in engine.sessions.buildSessions where s.role != .overseer && !engine.sessions.isArchived(s) {
+            for repo in repos {
+                if let c = await sessionCopy(s.id, repo: repo) {
+                    out.append((s, c.branch))
+                    break
+                }
+            }
+        }
+        return out
+    }
+
     /// Builds, tests and delivers one target as its method says, then sends the phone a review card.
     @discardableResult
     public func deliver(scope: String, targetID: String, session: String? = nil, factory: String? = nil, workItem: Int? = nil) async -> TestDelivery? {
-        guard let t = center.store[scope].target(targetID), center.working[targetID] == nil else { return nil }
+        guard var t = center.store[scope].target(targetID), center.working[targetID] == nil else { return nil }
+        // A session's delivery builds the version in its own copy of the code, when it has one.
+        let copy = await sessionCopy(session, repo: t.repo)
+        if let copy { t.repo = copy.path }
         if center.facts.gathered == nil { await gatherFacts() }
         let methodID = t.method ?? t.adapter.recommended(currentFacts)
         let method = t.adapter.method(methodID) ?? TestAdapters.preview
-        var d = TestDelivery(scope: scope, target: t.id, kind: method.kind, title: t.title)
+        var d = TestDelivery(scope: scope, target: t.id, kind: method.kind,
+                             title: t.title + (copy.flatMap { $0.branch }.map { " · \($0)" } ?? ""))
         d.session = session
         center.update(d)
         let dir = center.folder(d.id)
@@ -381,6 +484,13 @@ public final class TestRunner {
         defer {
             center.working[targetID] = nil
             center.logs[targetID] = String(log.suffix(60000))
+            if !log.isEmpty { try? log.write(to: dir.appendingPathComponent(TestCenter.logFile), atomically: true, encoding: .utf8) }
+        }
+        /// Names the first error in the log, so the reason shows without opening it.
+        func failed(_ d: inout TestDelivery, _ message: String) -> TestDelivery {
+            let base = message.replacingOccurrences(of: " See the log in Test.", with: "")
+            let reason = XcodeSchemes.firstError(log).map { " \($0)" } ?? ""
+            return self.failed(&d, base + reason)
         }
         if let why = unavailable(t, method: methodID) { return failed(&d, why) }
 
@@ -575,6 +685,11 @@ public final class TestRunner {
 
     /// Starts the target's server once and keeps it running; returns its port when it answers.
     public func ensureDevServer(_ t: TestTarget) async -> Int? {
+        if let p = center.servers[t.id], p.isRunning,
+           p.currentDirectoryURL?.standardizedFileURL != directory(t).standardizedFileURL {
+            p.terminate()
+            center.servers[t.id] = nil
+        }
         if let p = center.servers[t.id], p.isRunning, let port = t.port ?? serverPort(t.id) { return port }
         guard let cmd = t.startCommand, !cmd.isEmpty else { return t.port }
         let p = Process()

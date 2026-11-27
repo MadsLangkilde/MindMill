@@ -99,6 +99,8 @@ extension SessionHub {
                 if orderHook(data) { continue }
             } else if TestSuggestion.parse(data) != nil, engine.tests.suggested(data) {
                 continue
+            } else if engine.tests.deliveryRequested(data) {
+                continue
             }
             guard let order = CrewOrder.parse(data) else { continue }
             ClaudeChat.log("crew: order \(order)")
@@ -119,6 +121,14 @@ extension SessionHub {
         case .archive(let to, _):
             guard let target = session(to), target.role != .overseer else { return }
             archiveFinished(target)
+        case .folder(let to, let path, _):
+            guard let target = session(to) else { return }
+            target.folders.removeAll { $0 == path }
+            target.folders.append(path)
+            save()
+        case .link(let to, let about, _):
+            guard let target = session(to), target.role == .solo || target.role == .lead else { return }
+            link(target, to: about)
         case .factoryAsk(let from, let text, let options, let checkpoint):
             engine.factories.asked(from: from, text: text, options: options, checkpoint: checkpoint)
         case .factoryLog(let from, let text):
@@ -139,10 +149,14 @@ extension SessionHub {
             let project = req.project ?? parent?.project ?? sender?.project
             let from = senderLabel(req.from)
             let brief = req.text.isEmpty ? "Start on: \(req.title)" : req.text
+            var isDir: ObjCBool = false
+            let repo = req.repo.map { URL(fileURLWithPath: KBConfig.expandTilde($0)) }
+                .flatMap { FileManager.default.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue ? $0 : nil }
             newSession(title: req.title, project: project,
                        message: "[From \(from)]\n\(brief)", display: "✉ \(from)\n\(brief)",
                        role: role, parentID: role == .member ? parent?.id : nil, model: req.model, strategy: strategy,
-                       about: req.about ?? (role == .member ? parent?.about : nil), show: false, space: .build)
+                       about: req.about ?? (role == .member ? parent?.about : nil), show: false, space: .build,
+                       workingDirectory: repo)
             engine.report("\(from) started “\(req.title)”.")
             crewChanged()
         }
@@ -228,6 +242,7 @@ extension SessionHub {
                                message: brief.isEmpty ? nil : "[From you, through \(lead.title)'s crew]\n\(brief)",
                                display: brief.isEmpty ? nil : brief, role: .member, parentID: lead.id, strategy: strategy,
                                about: lead.about)
+            if !brief.isEmpty { s.brief = brief }
             deliverNote("“\(s.title)” was added under you by the user; it reports to you with `kb crew send lead`.", to: lead)
             crewChanged()
             return s
@@ -256,7 +271,8 @@ extension SessionHub {
         }
         s.pendingSetup = setup.isEmpty ? nil : setup.joined(separator: "\n\n")
         if !brief.isEmpty {
-            send(brief, in: s, display: brief + (strategy.map { "\n\nStrategy: \($0.title)" } ?? ""))
+            s.brief = brief
+            send(brief, in: s, display: brief)
         }
         crewChanged()
         return s
@@ -397,6 +413,18 @@ extension SessionHub {
             deliver("“\(s.title)” (`\(s.id.prefix(8))`) is archived. If you asked the user about archiving it, that's settled: reply in one line.",
                     to: o, from: "the Mindmill app")
         }
+        crewChanged()
+    }
+
+    /// A session that found out its work is a work item or a pull request: the app then shows its stage and archives
+    /// it when that completes. One already tied to a work item or pull request keeps it.
+    public func link(_ s: WorkSession, to about: String) {
+        guard !FinishedCheck.isTracked(about: s.about) else {
+            if s.about != about { deliverNote("This session is already tied to `\(s.about ?? "")`; it stays that way.", to: s) }
+            return
+        }
+        s.about = about
+        save()
         crewChanged()
     }
 

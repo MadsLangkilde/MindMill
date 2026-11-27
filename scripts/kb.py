@@ -1196,6 +1196,10 @@ def build_context(root: Path, cwd: Path) -> str:
     plugin = Path(__file__).resolve().parent.parent
     out.append(f"Root: `{root}` · CLI: `kb` (or `{plugin / 'bin' / 'kb'}`) · format: "
                f"`{plugin / 'docs' / 'format.md'}`")
+    picked = load_tools(root)
+    named = [f"{TOOL_AREA_TITLES[a].lower()}: {', '.join(TOOL_HOW[i]['title'] for i in picked[a])}" for a in TOOL_AREAS if picked[a]]
+    out.append("The user's tools (" + ("; ".join(named) if named else "none set yet") + "): work with these, not "
+               "others that happen to be connected; `kb tools` says how to reach each and each scope's tracker.")
     if not project:
         names = ", ".join(f"`{p['id']}`" for p in projects)
         out += [
@@ -2202,11 +2206,29 @@ def cmd_crew(a) -> int:
         target = crew_session(state, a.ref)
         queue_order({"kind": a.action, "to": target["id"], "from": sender, "at": iso_now()})
         label = target.get("title") or target["id"][:8]
+    elif a.action == "folder":
+        target = crew_session(state, a.ref)
+        path = Path(os.path.expanduser(a.path)).resolve()
+        if not path.is_dir():
+            sys.exit(f"kb: {a.path} isn't a folder")
+        queue_order({"kind": "folder", "to": target["id"], "path": str(path), "from": sender, "at": iso_now()})
+        label = f"{target.get('title') or target['id'][:8]} works in {path}"
+    elif a.action == "link":
+        target = crew_session(state, a.ref)
+        about = f"wi:{a.work_item}" if a.work_item else f"mypr:{a.pr}"
+        queue_order({"kind": "link", "to": target["id"], "about": about, "from": sender, "at": iso_now()})
+        label = f"{target.get('title') or target['id'][:8]} ← {'work item #' + str(a.work_item) if a.work_item else 'pull request !' + str(a.pr)}"
     else:
         if a.lead and a.under:
             sys.exit("kb: --lead and --under exclude each other")
         parent = crew_session(state, a.under) if a.under else None
-        queue_order({"kind": "start", "title": a.title, "parent": parent["id"] if parent else None,
+        repo = None
+        if a.repo:
+            path = Path(os.path.expanduser(a.repo)).resolve()
+            if not path.is_dir():
+                sys.exit(f"kb: {a.repo} isn't a folder")
+            repo = str(path)
+        queue_order({"kind": "start", "title": a.title, "parent": parent["id"] if parent else None, "repo": repo,
                      "lead": bool(a.lead), "project": a.project, "model": a.model, "strategy": a.strategy,
                      "about": a.about, "text": message(a.message, False), "from": sender, "at": iso_now()})
         label = a.title + (f" (under {parent.get('title') or parent['id'][:8]})" if parent else "")
@@ -2254,7 +2276,17 @@ def cmd_factory(a) -> int:
 
 
 def cmd_test(a) -> int:
-    """`kb test suggest`: a session proposes a change to the Mindmill app's test set-up; the user accepts or dismisses it."""
+    """`kb test suggest`: a session proposes a change to the Mindmill app's test set-up; the user accepts or dismisses it.
+    `kb test deliver`: a session asks the app to build its version and deliver it for testing."""
+    if a.action == "deliver":
+        me = os.environ.get("KB_SESSION_ID", "").strip()
+        if not me:
+            sys.exit("kb: only a session the Mindmill app runs can ask for a test build")
+        order = {"kind": "test_deliver", "session": me, "scope": (a.scope or "").strip(),
+                 "target": (a.target or "").strip(), "at": iso_now()}
+        queue_order(order)
+        print("queued: Mindmill builds your version and delivers it for testing; the user sees it under Test.")
+        return 0
     text = (a.text or "").strip()
     if not text:
         sys.exit("kb: say what to change and why with --text")
@@ -2852,6 +2884,105 @@ def load_settings(root: Path, pid: str) -> dict:
         return json.loads(settings_path(root, pid).read_text())
     except (OSError, ValueError):
         return {}
+
+
+# ---------------------------------------------------------------- the user's tools
+
+TOOL_AREAS = ("mail", "chat", "calendar", "docs")
+TOOL_AREA_TITLES = {"mail": "Mail", "chat": "Chat", "calendar": "Calendar", "docs": "Documents"}
+# How a skill reaches each service, per area; the names are the connector's (MCP server's) tools.
+TOOL_HOW = {
+    "m365": {"title": "Microsoft 365",
+             "mail": "Outlook through the Microsoft 365 connector: `outlook_email_search` (folder `sentitems` for mail "
+                     "the user sent), `read_resource` to read one; drafts with `outlook_create_draft`",
+             "chat": "Teams through the Microsoft 365 connector: `chat_message_search`, `teams_list_chats`, "
+                     "`teams_list_channel_messages`; `search_people` to find someone",
+             "calendar": "the Outlook calendar through the Microsoft 365 connector: `outlook_calendar_search`",
+             "docs": "SharePoint and OneDrive through the Microsoft 365 connector: `sharepoint_search`, "
+                     "`sharepoint_folder_search`"},
+    "google": {"title": "Google Workspace",
+               "mail": "Gmail through its connector: search messages (`in:sent` for mail the user sent), read a thread",
+               "calendar": "Google Calendar through its connector: list and search events",
+               "docs": "Google Drive through its connector: search and read files"},
+    "slack": {"title": "Slack",
+              "chat": "Slack through its connector: search messages (`from:me` for what the user wrote), read a channel "
+                      "or a direct message"},
+    "jira": {"title": "Jira and Confluence", "docs": "Confluence through the Atlassian connector: search and read pages"},
+    "figma": {"title": "Figma", "docs": "Figma through its connector: read a design from its link"},
+}
+TOOL_CHOICES = {area: [k for k, v in TOOL_HOW.items() if area in v] for area in TOOL_AREAS}
+TRACKER_HOW = {
+    "azure-devops": "Azure DevOps, which Mindmill talks to directly: `kb tracker …` (and `kb pr …` for pull requests)",
+    "local": "Mindmill's own tracker: `kb work …`",
+    "jira": "Jira through the Atlassian connector (its `jira`/`atlassian` tools)",
+    "github": "GitHub Issues through the GitHub connector (or `gh`)",
+    "linear": "Linear through its connector",
+}
+
+
+def tools_path(root: Path) -> Path:
+    return root / "tools.json"
+
+
+def load_tools(root: Path) -> dict[str, list[str]]:
+    try:
+        data = json.loads(tools_path(root).read_text())
+    except (OSError, ValueError):
+        data = {}
+    out: dict[str, list[str]] = {}
+    for area in TOOL_AREAS:
+        v = data.get(area) if isinstance(data, dict) else None
+        ids = [v] if isinstance(v, str) else v if isinstance(v, list) else []
+        ids = [i for i in ids if i in TOOL_CHOICES[area]]
+        out[area] = ids if area == "docs" else ids[:1]
+    return out
+
+
+def tools_report(root: Path) -> dict:
+    picked = load_tools(root)
+    areas = {area: [{"id": i, "title": TOOL_HOW[i]["title"], "how": TOOL_HOW[i][area]} for i in picked[area]]
+             for area in TOOL_AREAS}
+    trackers = []
+    for p in load_registry(root):
+        kind = (load_settings(root, p["id"]).get("tracker") or {}).get("kind") or "none"
+        trackers.append({"scope": p["id"], "title": p.get("title", p["id"]), "kind": kind,
+                         "how": TRACKER_HOW.get(kind, "no tracker")})
+    return {"areas": areas, "trackers": trackers}
+
+
+def cmd_tools(a) -> int:
+    root = kb_root()
+    if a.action == "set":
+        area = a.area
+        unknown = [i for i in a.ids if i != "none" and i not in TOOL_CHOICES[area]]
+        if unknown:
+            sys.exit(f"kb: {', '.join(unknown)} isn't a {TOOL_AREA_TITLES[area].lower()} tool; "
+                     f"choose from {', '.join(TOOL_CHOICES[area])} or none")
+        try:
+            data = json.loads(tools_path(root).read_text())
+        except (OSError, ValueError):
+            data = {}
+        ids = [i for i in dict.fromkeys(a.ids) if i != "none"]
+        data[area] = ids if area == "docs" else ids[:1]
+        write_atomic(tools_path(root), json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
+    report = tools_report(root)
+    if a.json:
+        print(json.dumps(report, indent=1, ensure_ascii=False))
+        return 0
+    print("The user's tools, as set in the Mindmill app. Use these, not others that happen to be connected, unless the "
+          "user says otherwise.")
+    for area in TOOL_AREAS:
+        got = report["areas"][area]
+        if got:
+            print(f"- {TOOL_AREA_TITLES[area]}: " + "; ".join(f"{t['title']}: {t['how']}" for t in got))
+        else:
+            print(f"- {TOOL_AREA_TITLES[area]}: not set. Ask the user which they use ({', '.join(TOOL_CHOICES[area])}) "
+                  f"and save it with `kb tools set {area} <tool>`.")
+    if report["trackers"]:
+        print("Work tracking, per scope:")
+        for t in report["trackers"]:
+            print(f"- {t['title']} (`{t['scope']}`): {t['how']}")
+    return 0
 
 
 def cmd_settings(a) -> int:
@@ -8019,7 +8150,7 @@ def main(argv: list[str]) -> int:
     rp.add_argument("--repo", help="only this repository (its scope id or title)")
     rp.add_argument("--fetch", action="store_true", help="fetch first, so behind counts are current")
     rp.add_argument("--json", action="store_true")
-    cr = sub.add_parser("crew", help="Build-mode sessions run by the Mindmill app: status, send, start, stop, archive")
+    cr = sub.add_parser("crew", help="Build-mode sessions run by the Mindmill app: status, send, start, stop, link, archive")
     crs = cr.add_subparsers(dest="action", required=True)
     crs.add_parser("status").add_argument("--json", action="store_true")
     crm = crs.add_parser("send", help="message a session (id, id prefix, me, lead, overseer or title)")
@@ -8033,10 +8164,22 @@ def main(argv: list[str]) -> int:
     crst.add_argument("--model")
     crst.add_argument("--strategy")
     crst.add_argument("--about", help="a KB entry id the session is about")
+    crst.add_argument("--repo", help="the repository folder it works in, when that isn't its scope's own (work in "
+                      "another repository gets its own session)")
     crst.add_argument("message", nargs="*", help="its first message; - reads stdin")
     crs.add_parser("stop").add_argument("ref")
     crs.add_parser("archive", help="archive a finished session (and the sessions under it) once the user said so"
                    ).add_argument("ref", help="id, id prefix, me or title")
+    crf = crs.add_parser("folder", help="tell the app the separate copy of the code (git worktree) a session works in, "
+                         "so the user can test that version")
+    crf.add_argument("ref", help="id, id prefix, me or title")
+    crf.add_argument("path")
+    crl = crs.add_parser("link", help="tie a session to the work item or pull request its work turned out to be, so the "
+                         "app follows it and archives the session when it completes")
+    crl.add_argument("ref", help="id, id prefix, me or title")
+    crlw = crl.add_mutually_exclusive_group(required=True)
+    crlw.add_argument("--work-item", type=int, help="the work item's number")
+    crlw.add_argument("--pr", type=int, help="the pull request's number")
 
     fa = sub.add_parser("factory", help="from a session the Mindmill app's software factory started: ask the user, log progress")
     fas = fa.add_subparsers(dest="action", required=True)
@@ -8049,6 +8192,9 @@ def main(argv: list[str]) -> int:
 
     te = sub.add_parser("test", help="testing in the Mindmill app: suggest a change to a project's test set-up")
     tes = te.add_subparsers(dest="action", required=True)
+    tsd = tes.add_parser("deliver", help="from a session: build its version and deliver it to the user for testing")
+    tsd.add_argument("--scope", help="the project; defaults to the session's")
+    tsd.add_argument("--target", help="one app or site by name, when the project has several")
     tss = tes.add_parser("suggest", help="propose a test set-up change; the user accepts or dismisses it under Test")
     tss.add_argument("--scope", help="the project; defaults to KB_SCOPE")
     tss.add_argument("--text", required=True, help="what to change and why, in a sentence")
@@ -8457,6 +8603,13 @@ def main(argv: list[str]) -> int:
     fun.add_argument("--text", required=True)
     fun.add_argument("--by", help="what brought it, e.g. an entry id")
 
+    tl = sub.add_parser("tools", help="the user's mail, chat, calendar, documents and trackers, and how to reach each")
+    tl.add_argument("--json", action="store_true")
+    tls = tl.add_subparsers(dest="action")
+    tlset = tls.add_parser("set", help="save which tool the user uses for an area (none clears it)")
+    tlset.add_argument("area", choices=TOOL_AREAS)
+    tlset.add_argument("ids", nargs="+", help="m365, google, slack, jira or figma; several only for docs")
+    tlset.add_argument("--json", action="store_true")
     st = sub.add_parser("settings", help="per-project settings.json")
     sts = st.add_subparsers(dest="action", required=True)
     sts.add_parser("show").add_argument("--project", "--scope", dest="project")
@@ -8660,7 +8813,7 @@ def main(argv: list[str]) -> int:
         "context": cmd_context, "resolve": cmd_resolve, "list": cmd_list, "search": cmd_search,
         "show": cmd_show, "new": cmd_new, "supersede": cmd_supersede, "lint": cmd_lint,
         "register": cmd_register, "open": cmd_open, "commit": cmd_commit, "inbox": cmd_inbox,
-        "backlog": cmd_backlog, "tracker": cmd_tracker, "sprint": cmd_sprint, "work": cmd_work, "layout": cmd_layout, "followup": cmd_followup, "settings": cmd_settings, "today": cmd_today,
+        "backlog": cmd_backlog, "tracker": cmd_tracker, "sprint": cmd_sprint, "work": cmd_work, "layout": cmd_layout, "followup": cmd_followup, "settings": cmd_settings, "tools": cmd_tools, "today": cmd_today,
         "sources": cmd_sources, "delete": cmd_delete, "move": cmd_move, "calendar": cmd_calendar,
         "reminder": cmd_reminder, "email": cmd_email, "goal": cmd_goal, "scopes": cmd_scopes, "tags": cmd_tags, "scope": cmd_scope, "project": cmd_project, "fact": cmd_fact, "crew": cmd_crew, "sync": cmd_sync, "share": cmd_share, "repos": cmd_repos, "factory": cmd_factory, "test": cmd_test, "scan": cmd_scan,
         "strategy": cmd_strategy, "people": cmd_people, "pr": cmd_pr, "discussion": cmd_discussion, "idea": cmd_idea, "note": cmd_note, "research": cmd_research, "docs": cmd_docs,

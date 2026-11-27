@@ -15,6 +15,18 @@ extension AppModel {
 
     func detectTestTargets(_ scope: String) { engine.tests.detectTargets(scope) }
 
+    /// The scopes Test offers for the open scope: itself, or the platform scopes in an Overview or product scope.
+    var testScopeChoices: [String] { TestScopes.choices(for: projectID, in: index) }
+
+    /// The scope Test shows.
+    var testScope: String? {
+        TestScopes.pick(testScopeChoices, chosen: testing.selectedScope) { testing.store[$0].isSetUp }
+    }
+
+    func runTestModule(_ scope: String, _ id: String) async {
+        await engine.tests.runModule(scope, id, session: testBuildFrom[scope])
+    }
+
     func testTargetDirectory(_ t: TestTarget) -> URL { engine.tests.directory(t) }
 
     func testContext(_ t: TestTarget) -> TestContext { engine.tests.context(t) }

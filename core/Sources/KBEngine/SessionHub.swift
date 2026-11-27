@@ -105,7 +105,7 @@ public final class SessionHub {
     }
 
     public func save() {
-        do { try SessionStore.save(list.map(\.record), to: storeURL) } catch {
+        do { try SessionStore.save(list.filter { !$0.isEmptyDraft }.map(\.record), to: storeURL) } catch {
             ClaudeChat.log("sessions: save failed: \(error.localizedDescription)")
         }
     }
@@ -136,7 +136,7 @@ public final class SessionHub {
     public func newSession(title: String? = nil, project: String? = nil, subject: AskSubject? = nil,
                            message: String? = nil, display: String? = nil, role: SessionRole = .solo, parentID: String? = nil,
                            model: String? = nil, strategy: Strategy? = nil, about: String? = nil, show: Bool = true,
-                           space: SessionSpace? = nil) -> WorkSession {
+                           space: SessionSpace? = nil, workingDirectory: URL? = nil) -> WorkSession {
         loadIfNeeded()
         var role = role, parentID = parentID
         // More work on something that already has a session goes under it.
@@ -147,7 +147,7 @@ public final class SessionHub {
         }
         let index = engine.index
         let p = role == .overseer ? nil : (project ?? subject?.project ?? engine.scope).flatMap { index.project($0) != nil ? $0 : nil }
-        let cwd = role == .overseer ? engine.rootURL : directory(scope: p)
+        let cwd = role == .overseer ? engine.rootURL : workingDirectory ?? directory(scope: p)
         var aboutID = about
         if aboutID == nil, case .entry(let id, _) = subject { aboutID = id.rawValue }
         let s = WorkSession(record: SessionRecord(title: title ?? subject?.title ?? "New session", project: p,
@@ -231,7 +231,8 @@ public final class SessionHub {
         let prompt = s.role == .overseer
             ? ClaudeModes.overseer(kbRoot: root.path)
             : ClaudeModes.session(project: s.project, projectTitle: title, kbRoot: root.path) + "\n"
-                + ClaudeModes.crew(role: s.role, sessionID: s.id, leadTitle: lead?.title, leadID: lead?.id, project: s.project)
+                + ClaudeModes.crew(role: s.role, sessionID: s.id, leadTitle: lead?.title, leadID: lead?.id, project: s.project,
+                                   about: s.about)
                 + (s.space == .build ? engine.testingNote(s.project) : "")
                 + (s.isAssistant ? "\n" + ClaudeModes.assistant : "")
         let tools = (s.role == .overseer ? Self.sessionTools : Self.buildTools) + s.extraTools
@@ -407,7 +408,23 @@ public final class SessionHub {
 
     public var overseer: WorkSession? { list.first { $0.role == .overseer } }
     /// Build mode's sessions.
-    public var buildSessions: [WorkSession] { list.filter { $0.space == .build } }
+    public var buildSessions: [WorkSession] { list.filter { $0.space == .build && !$0.isEmptyDraft } }
+
+    /// Quick Start: a session in Build with no title, brief or strategy. It shows in the list once something is written
+    /// in it, titled from its first message, and goes away if nothing is (`discardIfEmpty`).
+    @discardableResult
+    public func startQuick(project: String?) -> WorkSession {
+        let s = newSession(project: project, role: .solo, space: .build)
+        s.quickDraft = true
+        crewChanged()
+        return s
+    }
+
+    /// A Quick Start session left without anything written in it.
+    public func discardIfEmpty(_ s: WorkSession) {
+        guard s.isEmptyDraft else { return }
+        delete(s)
+    }
     public var planSessions: [WorkSession] {
         list.filter { $0.space == .plan && $0.role != .overseer }.sorted { $0.updated > $1.updated }
     }

@@ -45,6 +45,9 @@ struct ConnectionsSettingsView: View {
                 }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
             }
+            Section("What you use") {
+                UserToolsPicker()
+            }
             Section("Work tracking per scope") {
                 ForEach(model.index.projects) { p in
                     LabeledContent(p.title) {
@@ -233,5 +236,45 @@ struct AddToolSheet: View {
                 error = r.map { $0.stderr.isEmpty ? $0.stdout : $0.stderr } ?? model.claudeMissingExplanation
             }
         }
+    }
+}
+
+/// Which tool the user works with for mail, chat, calendar and documents. Mindmill's skills use these, not whichever
+/// tool happens to be connected (`kb tools`).
+struct UserToolsPicker: View {
+    @Environment(AppModel.self) private var model
+    @State private var tools = UserTools()
+    @State private var loaded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(Brain.name) and Mindmill's skills use these when they read or write mail, chats, the calendar or documents for you, such as when they prepare a meeting or write as you.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(UserTools.areas, id: \.self) { area in
+                AdaptiveCardLayout(spacing: 10, stackedSpacing: 4, minInfoWidth: 120) {
+                    Text(area.title).frame(maxWidth: .infinity, alignment: .leading)
+                    ChipRow(spacing: 6) {
+                        ForEach(UserTools.services(for: area)) { service in
+                            Toggle(service.title, isOn: binding(area, service.id)).toggleStyle(.button)
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            guard !loaded else { return }
+            tools = UserTools.load(root: model.rootURL)
+            loaded = true
+        }
+    }
+
+    private func binding(_ area: ClaudeConnectors.Area, _ id: String) -> Binding<Bool> {
+        Binding(
+            get: { tools.tools(for: area).contains(id) },
+            set: { on in
+                let now = tools.tools(for: area)
+                tools.set(area, on ? (UserTools.allowsSeveral(area) ? now + [id] : [id]) : now.filter { $0 != id })
+                do { try tools.save(root: model.rootURL) } catch { model.errorMessage = error.localizedDescription }
+            })
     }
 }

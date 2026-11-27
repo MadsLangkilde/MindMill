@@ -91,6 +91,7 @@ struct KBApp: App {
     var body: some Scene {
         Window("Mindmill", id: "main") {
             ContentView()
+                .linkChoices()
                 .environment(model)
                 .onAppear { delegate.model = model }
                 .onOpenURL { model.handle(url: $0) }
@@ -102,6 +103,7 @@ struct KBApp: App {
 
         WindowGroup("Meeting", id: "meeting", for: String.self) { $id in
             MeetingWindow(meetingID: id ?? "")
+                .linkChoices()
                 .environment(model)
         }
         .defaultSize(width: 1180, height: 780)
@@ -117,6 +119,7 @@ struct KBApp: App {
 
         Window("Ask", id: "ask") {
             AskWindow()
+                .linkChoices()
                 .environment(model)
         }
         .defaultSize(width: 720, height: 760)
@@ -129,6 +132,7 @@ struct KBApp: App {
 
         Window("\(Brain.name)", id: "claude") {
             SessionsWindow()
+                .linkChoices()
                 .environment(model)
         }
         .defaultSize(width: 1040, height: 820)

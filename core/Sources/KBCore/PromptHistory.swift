@@ -9,6 +9,17 @@ public struct PromptHistory: Equatable, Sendable {
         self.entries = Array(entries.suffix(Self.limit))
     }
 
+    /// A session's messages in the order they were sent, so ↑ steps back through exactly that conversation
+    /// (a message sent twice in a row counts once).
+    public init(sessionMessages: [String]) {
+        var out: [String] = []
+        for m in sessionMessages {
+            let t = m.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty, out.last != t { out.append(t) }
+        }
+        self.init(entries: out)
+    }
+
     /// Sending a prompt again moves it to the newest place instead of keeping two.
     public mutating func record(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)

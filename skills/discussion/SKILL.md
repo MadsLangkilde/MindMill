@@ -1,6 +1,6 @@
 ---
 name: discussion
-description: Track an open discussion (an email thread, a Teams chat, a debate across meetings) in the KB until it settles, and file what it produces as facts, decisions, follow-ups or backlog items. Use for "start a discussion from this mail", "what's the state of the X discussion", "check for new replies", "file the findings", "conclude it", and when the Mindmill app's Discussions buttons send `/mindmill:discussion <action> …`.
+description: Track an open discussion (an email thread, a chat in Teams or Slack, a debate across meetings) in the KB until it settles, and file what it produces as facts, decisions, follow-ups or backlog items. Use for "start a discussion from this mail", "what's the state of the X discussion", "check for new replies", "file the findings", "conclude it", and when the Mindmill app's Discussions buttons send `/mindmill:discussion <action> …`.
 allowed-tools: Bash(kb:*), Read, Edit, mcp__claude_ai_Microsoft_365__outlook_email_search, mcp__claude_ai_Microsoft_365__chat_message_search, mcp__claude_ai_Microsoft_365__teams_list_chats, mcp__claude_ai_Microsoft_365__read_resource
 ---
 
@@ -22,18 +22,18 @@ The file:
 ```
 
 Frontmatter: `title`, `date` (started), `updated`, `status`, `waiting_on`, `people` (names only, never email
-addresses), `channel` (email | teams | meeting | other), `thread` (the email conversation id or the Teams chat
+addresses), `channel` (email | teams | slack | meeting | other), `thread` (the email conversation id or the chat
 id, to find replies), `link` (the mail or chat web link), `summary`, `scopes`.
 
 The app sends one of these. `<id>` is the discussion's entry id.
 
 ## `start <scope> <what to look for>`
 
-1. Find the thread: `outlook_email_search` (and `chat_message_search` when it sounds like Teams) with the
-   words given. If several threads match, ask the user which one with choices; if none, say so and stop.
+1. Find the thread in the user's mail tool (and their chat tool when it sounds like a chat), the ones `kb tools`
+   names (Microsoft 365: `outlook_email_search`, `chat_message_search`), with the words given. If several threads match, ask the user which one with choices; if none, say so and stop.
 2. Check `kb discussion list --all-projects --json` for one with the same `thread`; if it exists, do `refresh`
    on it instead.
-3. Read the messages (`read_resource` when the preview isn't enough) and create it:
+3. Read the messages (in full when the preview isn't enough) and create it:
    `kb new discussion --scope <scope> --title "<the question being discussed, ≤10 words>" --summary "<one line>"
    --field channel=email --field thread=<conversation id> --field link=<webLink> --field "people=[Ana B, Bo C]"
    --field waiting_on=<me|others|nobody> --body "<Summary text>"`. The user picked the scope in the app, so

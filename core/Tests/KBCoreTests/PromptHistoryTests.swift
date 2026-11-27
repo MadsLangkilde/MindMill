@@ -56,4 +56,17 @@ struct PromptHistoryTests {
         r.reset()
         #expect(!r.takesDown(text: "b", caret: 1, in: h))
     }
+
+    @Test func aSessionsOwnMessagesWalkBackInOrderAndForwardAgain() {
+        let h = PromptHistory(sessionMessages: ["first", "second", "second", "third", "  "])
+        #expect(h.entries == ["first", "second", "third"])
+        var r = PromptRecall()
+        #expect(r.older(current: "", in: h) == "third")
+        #expect(r.older(current: "third", in: h) == "second")
+        #expect(r.older(current: "second", in: h) == "first")
+        #expect(r.older(current: "first", in: h) == nil)
+        #expect(r.newer(in: h) == "second")
+        #expect(r.newer(in: h) == "third")
+        #expect(r.newer(in: h) == "")
+    }
 }

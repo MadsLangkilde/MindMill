@@ -4,9 +4,26 @@ import KBCore
 /// What sessions can use beyond Mindmill: the AI's skills and commands, its plugins and its tools (MCP servers);
 /// and, for the phone, entries' sharing and the suggestions waiting on a session or a note.
 extension MindmillEngine {
-    /// Sessions run on Claude Code unless Codex was picked as the brain; Gemini CLI keeps Claude's folders.
     public var brainHasPlugins: Bool { aiSetup.brainProvider.id == AIProvider.claudeCode.id }
-    public var skillHome: SkillCatalog.Home { .of(brain: aiSetup.brainProvider.id == AIProvider.codex.id ? "codex" : "claude") }
+    public var skillHome: SkillCatalog.Home { .of(brain: aiSetup.brainProvider.id) }
+    /// Puts Mindmill's skills where the assistants in use read them, and takes them away where none does.
+    public func placeSkills() {
+        let root = URL(fileURLWithPath: KBConfig.expandTilde(pluginRootPath))
+        let setup = aiSetup
+        Task {
+            let line: String? = await Task.detached(priority: .utility) {
+                do {
+                    let c = try AssistantSkills.sync(setup, skills: root.appendingPathComponent("skills"),
+                                                     kbCommand: root.appendingPathComponent("bin/kb").path)
+                    return c.isEmpty ? nil : "skills: placed \(c.written), removed \(c.removed)"
+                } catch {
+                    return "skills: \(error.localizedDescription)"
+                }
+            }.value
+            if let line { ClaudeChat.log(line) }
+        }
+    }
+
     public var connectorsURL: URL? { brainHasPlugins ? URL(string: "https://claude.ai/settings/connectors") : nil }
 
     /// Runs the `claude` CLI; nil when it isn't found.

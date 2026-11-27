@@ -2,8 +2,15 @@ import Foundation
 
 /// A message between sessions as shown in a transcript: `✉ <from>` and the text, made easier to read.
 public enum CrewMessage {
-    /// The sender and the text of a `✉` line; `nil` for anything else.
+    /// The sender and the text of a `✉` line, or of a `[From …]` message as a resumed conversation has it; `nil` for
+    /// anything else, and for the user's own words passed on through a lead (`[From you, …]`).
     public static func split(_ display: String) -> (from: String, text: String)? {
+        if display.hasPrefix("[From "), let close = display.firstIndex(of: "]") {
+            let from = String(display[display.index(display.startIndex, offsetBy: 6)..<close])
+            guard !from.isEmpty, !from.lowercased().hasPrefix("you") else { return nil }
+            let text = display[display.index(after: close)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            return (from, text)
+        }
         guard display.hasPrefix("✉ ") else { return nil }
         let rest = String(display.dropFirst(2))
         if let nl = rest.firstIndex(of: "\n") {
@@ -15,6 +22,26 @@ public enum CrewMessage {
         }
         if let r = rest.range(of: ": ") { return (String(rest[..<r.lowerBound]), String(rest[r.upperBound...])) }
         return (rest, "")
+    }
+
+    /// Who sent it, for the message's header: "Overview", "Mindmill", "Session “Login” (lead)".
+    public static func sender(_ from: String) -> String {
+        switch from {
+        case "the overview session": return "Overview"
+        case "the Mindmill app": return "Mindmill"
+        case "the command line": return "The command line"
+        default:
+            if from.hasSuffix(" (lead)") { return "Session “\(from.dropLast(7))” (lead)" }
+            if from.hasPrefix("the ") { return from.prefix(1).uppercased() + from.dropFirst() }
+            return "Session “\(from)”"
+        }
+    }
+
+    /// The start of the message on one line, without Markdown, for the collapsed header.
+    public static func preview(_ text: String, limit: Int = 140) -> String {
+        var t = text.replacingOccurrences(of: #"[*_`#>]+"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        return t.count > limit ? String(t.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…" : t
     }
 
     /// Inline option lists ("Options: (1) … (2) …") become numbered lines, and a leading label such as

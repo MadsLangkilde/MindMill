@@ -10,5 +10,6 @@ Follow the `mindmill:work-item` skill (`${CLAUDE_PLUGIN_ROOT}/skills/work-item/S
 Read it first. Never put KB ids, KB file paths or `kb://` links in the work item: it is shared with the team,
 and the KB exists only on this machine. Describe the source in words. The arguments, if any, are the source: a KB id (a follow-up, meeting or decision), a work
 item id to use as parent, or the user's own description. The backlog entry goes in the scope whose tracker
-settings it uses (`--project <scope>`). When the scope's `tracker.kind` is `local` (Mindmill's own tracker,
-`kb work add`) or `jira` (Claude's Jira connector), follow that skill's "Local and Jira trackers" section.
+settings it uses (`--project <scope>`), and goes to that scope's tracker, never another one. When its
+`tracker.kind` is `local` (Mindmill's own tracker, `kb work add`), `jira`, `github` or `linear` (their
+connectors), follow that skill's "Other trackers" section.

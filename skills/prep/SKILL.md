@@ -1,6 +1,6 @@
 ---
 name: prep
-description: Prepare a meeting: find it in the calendar, look back at earlier meetings in the series and everything since, gather what the knowledge base, the code, the tracker and recent Teams and email say about its topic, and write a prepared meeting file with context and topics or questions. Use for "prepare my 10:00", "help me prepare for the retro", "what should I bring up at the planning", "prep the retry sync", from the morning routine, and when the Mindmill app's Prepare with Claude asks for it.
+description: Prepare a meeting: find it in the calendar, look back at earlier meetings in the series and everything since, gather what the knowledge base, the code, the tracker and recent chats and email say about its topic, and write a prepared meeting file with context and topics or questions. Use for "prepare my 10:00", "help me prepare for the retro", "what should I bring up at the planning", "prep the retry sync", from the morning routine, and when the Mindmill app's Prepare with Claude asks for it.
 allowed-tools: Bash(kb:*), Bash(curl:*), Bash(git:*), Read, Grep, Glob, Write, Edit, mcp__claude_ai_Microsoft_365__outlook_calendar_search, mcp__claude_ai_Microsoft_365__outlook_email_search, mcp__claude_ai_Microsoft_365__chat_message_search, mcp__claude_ai_Microsoft_365__teams_list_chats, mcp__claude_ai_Microsoft_365__read_resource
 ---
 
@@ -16,8 +16,8 @@ are suggestions: the user picks the ones for the meeting into `## Questions` and
   `start`, `end`, `attendees`, `organizer`, the invite text under `## Prep`, and `previous:` set to the last
   held meeting in the series). `kb show <id>` and work in that file.
 - **Not there, or at the wrong time?** The meeting may have moved since the last sync: run `kb sync calendar`
-  (with `--from`/`--to` for a day more than two weeks ahead) and look again before falling back to Outlook.
-- Otherwise, find the event with `outlook_calendar_search` (today or the date given), or work from the
+  (with `--from`/`--to` for a day more than two weeks ahead) and look again before falling back to the calendar itself.
+- Otherwise, find the event in the user's calendar, the one `kb tools` names (Microsoft 365: `outlook_calendar_search`), today or on the date given, or work from the
   user's description, and create the file (step 5).
 
 ## 2. Which project?
@@ -39,7 +39,7 @@ The best preparation is what happened since last time.
 - **Tracker** (settings `tracker`): work items and PRs on the topic. For sprint ceremonies, the sprint itself.
 - **Code:** what exists today for the topic, in a line or two. `git log --since=<previous date>` in the
   project's repo for what shipped.
-- **Teams and email:** threads on the topic or with the organizer since the previous meeting; at most 3,
+- **Chat and email** (the user's tools, `kb tools`): threads on the topic or with the organizer since the previous meeting; at most 3,
   one line each.
 
 ## 4. Shape it by the kind of meeting

@@ -8,7 +8,7 @@ struct TestSidebarRow: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let scope = model.testing.selectedScope ?? model.projectID
+        let scope = model.testScope
         let plan = scope.map { model.testing.store[$0] } ?? ScopeTestPlan()
         HStack(spacing: 8) {
             Image(systemName: "checkmark.seal").foregroundStyle(plan.isSetUp ? Color.green : Color.secondary).frame(width: 18)
@@ -29,13 +29,14 @@ struct TestView: View {
     @Environment(AppModel.self) private var model
     @State private var moreOptions: Set<String> = []
 
-    private var scope: String? { model.testing.selectedScope ?? model.projectID }
+    private var scope: String? { model.testScope }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 if let scope {
+                    BuildFromRow(scope: scope)
                     CompatibilityCard(scope: scope)
                     SuggestionsCard(scope: scope)
                     let plan = model.testing.store[scope]
@@ -63,7 +64,7 @@ struct TestView: View {
         }
         .task(id: scope) {
             guard let scope else { return }
-            if model.testing.store[scope].targets.isEmpty { model.detectTestTargets(scope) }
+            model.detectTestTargets(scope)
             if model.testing.facts.gathered == nil { await model.gatherTestFacts() }
             await model.runCompatibilityCheck(scope)
         }
@@ -78,15 +79,23 @@ struct TestView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
-                Picker("Project", selection: Binding(get: { scope ?? "" }, set: { model.testing.selectedScope = $0.isEmpty ? nil : $0 })) {
-                    ForEach(model.index.projects.filter { !$0.wide }) { Text($0.title).tag($0.id) }
+                let choices = model.testScopeChoices
+                if choices.count > 1 {
+                    Picker("Project", selection: Binding(get: { scope ?? "" }, set: { model.testing.selectedScope = $0.isEmpty ? nil : $0 })) {
+                        ForEach(choices, id: \.self) { Text(model.index.project($0)?.title ?? $0).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                } else if let scope {
+                    Text(model.index.project(scope)?.title ?? scope).font(.callout.weight(.medium)).foregroundStyle(.secondary)
                 }
-                .labelsHidden()
-                .fixedSize()
                 Button {
                     Task {
                         await model.gatherTestFacts()
-                        if let scope { model.detectTestTargets(scope) }
+                        if let scope {
+                            model.detectTestTargets(scope)
+                            await model.runCompatibilityCheck(scope)
+                        }
                     }
                 } label: { Label(model.testing.gathering ? "Checking…" : "Check Again", systemImage: "arrow.clockwise") }
                 .disabled(model.testing.gathering)
@@ -236,7 +245,7 @@ private struct TargetCard: View {
                 }
             } else {
                 ChipRow(spacing: 8) {
-                    Button { Task { await model.deliverTest(scope: scope, targetID: target.id) } } label: {
+                    Button { Task { await model.deliverTest(scope: scope, targetID: target.id, session: model.testBuildFrom[scope]) } } label: {
                         Label(deliverTitle(method), systemImage: "paperplane")
                     }
                     .disabled(!ready)
@@ -252,6 +261,7 @@ private struct TargetCard: View {
                 InstallLinkView(link: link)
             }
             if moreOptions { TargetOptions(scope: scope, target: target, chosen: chosen) }
+            ModulesSection(scope: scope, app: target)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.25)))
@@ -263,6 +273,115 @@ private struct TargetCard: View {
         case .iosDevice: return "Install on iPhone"
         case .iosLink: return "Make Install Link"
         case .testflight: return "Upload to TestFlight"
+        }
+    }
+}
+
+/// An app's modules (Swift packages, Gradle modules), folded under it: each built and tested on its own here.
+private struct ModulesSection: View {
+    @Environment(AppModel.self) private var model
+    let scope: String
+    let app: TestTarget
+
+    var body: some View {
+        let modules = model.testing.store[scope].modules(of: app.id)
+        if !modules.isEmpty {
+            let key = "test.modules.\(app.id)"
+            let open = model.foldStates[key] ?? false
+            let failing = modules.filter { $0.lastRun?.ok == false }.count
+            let busy = modules.contains { model.testing.working[$0.id] != nil }
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                Button { model.foldStates[key] = !open } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                        Text("Modules").font(.callout.weight(.semibold))
+                        Text("\(modules.count)").font(.callout).foregroundStyle(.secondary)
+                        if failing > 0 {
+                            Text("\(failing) failing").font(.caption).foregroundStyle(.red)
+                        }
+                        Spacer(minLength: 4)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("The parts of \(app.title) that build and test on their own")
+                if open {
+                    AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 200) {
+                        Text("Build and test one part of the app on its own, on this Mac.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Build & Test All") {
+                            Task { for m in modules { await model.runTestModule(scope, m.id) } }
+                        }
+                        .controlSize(.small)
+                        .disabled(busy)
+                        .fixedSize()
+                    }
+                    ForEach(modules) { ModuleRow(scope: scope, module: $0) }
+                }
+            }
+        }
+    }
+}
+
+private struct ModuleRow: View {
+    @Environment(AppModel.self) private var model
+    let scope: String
+    let module: TestTarget
+    @State private var showLog = false
+
+    var body: some View {
+        let working = model.testing.working[module.id]
+        let log = model.testing.logs[module.id] ?? ""
+        VStack(alignment: .leading, spacing: 4) {
+            AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 180) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(module.title).font(.callout.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+                    status(working)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) {
+                    if !log.isEmpty && working == nil {
+                        Button(showLog ? "Hide Log" : "Log") { showLog.toggle() }.buttonStyle(.borderless).controlSize(.small)
+                    }
+                    Button("Build & Test") { Task { await model.runTestModule(scope, module.id) } }
+                        .controlSize(.small)
+                        .disabled(working != nil)
+                }
+                .fixedSize()
+            }
+            if showLog && !log.isEmpty {
+                ScrollView {
+                    Text(String(log.suffix(8000))).font(.caption.monospaced()).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 200)
+            }
+        }
+        .padding(.leading, 18)
+    }
+
+    @ViewBuilder private func status(_ working: String?) -> some View {
+        if let working {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(working).font(.caption).foregroundStyle(.secondary)
+            }
+        } else if let run = module.lastRun {
+            let time = run.at.formatted(date: .abbreviated, time: .shortened)
+            if !run.built {
+                Label("Didn't build · \(time)", systemImage: "xmark.circle.fill").font(.caption).foregroundStyle(.red)
+            } else if let t = run.tests, !t.ok {
+                Label("\(t.failed) failed, \(t.passed) passed · \(time)", systemImage: "xmark.circle.fill").font(.caption).foregroundStyle(.red)
+            } else if let t = run.tests, t.passed > 0 {
+                Label("\(t.passed) passed · \(time)", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+            } else {
+                Label("Built\(run.tests == nil ? "" : ", tests ran") · \(time)", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+            }
+        } else {
+            Text(module.type == .android ? module.path : "Swift package").font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -421,16 +540,54 @@ private struct RecentDeliveries: View {
         if !list.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Recent deliveries").font(.headline)
-                ForEach(Array(list)) { d in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: d.state == .failed ? "xmark.circle" : d.state == .building ? "hammer" : "checkmark.circle")
-                            .foregroundStyle(d.state == .failed ? Color.orange : Color.secondary)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("\(d.title) · \(d.created.formatted(date: .omitted, time: .shortened))").font(.callout)
-                            if let m = d.message { Text(m).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                        }
-                    }
+                ForEach(Array(list)) { DeliveryRow(delivery: $0) }
+            }
+        }
+    }
+}
+
+private struct DeliveryRow: View {
+    @Environment(AppModel.self) private var model
+    let delivery: TestDelivery
+    @State private var log: String?
+
+    var body: some View {
+        let d = delivery
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: d.state == .failed ? "xmark.circle" : d.state == .building ? "hammer" : "checkmark.circle")
+                    .foregroundStyle(d.state == .failed ? Color.orange : Color.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(d.title) · \(d.created.formatted(date: .omitted, time: .shortened))").font(.callout)
+                    if let m = d.message { Text(m).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if d.state != .building, model.testing.log(d.id) != nil {
+                    Button(log == nil ? "Show Log" : "Hide Log") {
+                        log = log == nil ? model.testing.log(d.id) : nil
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+            }
+            if let log {
+                ScrollView {
+                    Text(String(log.suffix(20000))).font(.caption.monospaced()).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 260)
+                .padding(6)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                HStack(spacing: 8) {
+                    Button("Copy Log") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(log, forType: .string)
+                    }
+                    Button("Open in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.testing.folder(d.id).appendingPathComponent(TestCenter.logFile)]) }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
             }
         }
     }
@@ -501,15 +658,86 @@ struct TestHeaderButton: View {
                     .disabled(model.testing.working[t.id] != nil || !model.testTargetReady(t))
                 }
                 Divider()
-                Button("Open Test…") { model.openTestMenu(scope: scope) }
+                Button("Open Test…") {
+                    model.testBuildFrom[scope] = session.id
+                    model.openTestMenu(scope: scope)
+                }
             } else {
-                Button("Set Up Testing…") { model.openTestMenu(scope: scope) }
+                Button("Set Up Testing…") {
+                    model.testBuildFrom[scope] = session.id
+                    model.openTestMenu(scope: scope)
+                }
             }
         } label: {
             Label(busy ? "Delivering…" : "Test", systemImage: "iphone.and.arrow.forward")
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Deliver what this session builds to your phone, a preview or a link")
+        .help("Build this session's version and deliver it to your phone, a preview or a link")
+    }
+}
+
+/// Which version a test builds: this Mac's own copy of the project, or the version a session is working on.
+struct BuildFromRow: View {
+    @Environment(AppModel.self) private var model
+    let scope: String
+    @State private var sessions: [(id: String, title: String, branch: String?)] = []
+    @State private var local: String?
+    @State private var loading = false
+
+    var body: some View {
+        AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 200) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Build from").font(.callout.weight(.medium))
+                Text("Sessions can work on their own version of the code. Pick whose version to build and test.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                if loading { ProgressView().controlSize(.small) }
+                Picker("Build from", selection: Binding(get: { model.testBuildFrom[scope] ?? "" },
+                                                        set: { model.testBuildFrom[scope] = $0.isEmpty ? nil : $0 })) {
+                    Text("This Mac's version" + (local.map { " (\(Self.short($0, 30)))" } ?? "")).tag("")
+                    ForEach(sessions, id: \.id) { s in
+                        Text("“\(Self.short(SessionTitle.split(s.title).text, 40))”" + (s.branch.map { " (\(Self.short(Self.lastPart($0), 24)))" } ?? ""))
+                            .tag(s.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(minWidth: 160, maxWidth: 300)
+                .help(choiceHelp)
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .task(id: scope) { await load() }
+    }
+
+    /// The full title and branch of what's picked, since the menu shortens them.
+    private var choiceHelp: String {
+        guard let id = model.testBuildFrom[scope], let s = sessions.first(where: { $0.id == id }) else {
+            return "This Mac's version" + (local.map { ", on \($0)" } ?? "")
+        }
+        return "“\(SessionTitle.split(s.title).text)”" + (s.branch.map { ", on \($0)" } ?? "")
+    }
+
+    static func short(_ s: String, _ limit: Int) -> String {
+        s.count > limit ? String(s.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…" : s
+    }
+
+    /// `feature/team/1234-login-flow` → `1234-login-flow`.
+    static func lastPart(_ branch: String) -> String {
+        branch.split(separator: "/").last.map(String.init) ?? branch
+    }
+
+    private func load() async {
+        loading = true
+        local = await model.engine.tests.localBranch(scope)
+        sessions = await model.engine.tests.sessionsWithCopies(scope).map { ($0.session.id, $0.session.title, $0.branch) }
+        if let picked = model.testBuildFrom[scope], !sessions.contains(where: { $0.id == picked }),
+           model.session(picked) == nil {
+            model.testBuildFrom[scope] = nil
+        }
+        loading = false
     }
 }

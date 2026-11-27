@@ -36,6 +36,9 @@ extension AppModel {
     /// Starts the Claude session that checks, connects and saves the chosen tools, in Plan → Sessions.
     func startSourceSetup(tracker: String?, tools: [String], servers: [ClaudeConnectors.Server]) {
         let scopes = index.projects.map { SourceSetup.Scope(id: $0.id, title: $0.title, tracker: trackerKind($0.id)) }
+        var picked = UserTools.load(root: rootURL)
+        picked.adopt(tools)
+        try? picked.save(root: rootURL)
         let brief = SourceSetup.brief(tracker: tracker, tools: tools, scopes: scopes, connected: servers)
         mode = .plan
         sidebarSelection = .sessions

@@ -59,4 +59,17 @@ import Testing
         #expect(PrepLinks.label(urls[1]) == "acme.sharepoint.com/Plan.docx")
         #expect(MarkdownBlocks.parse("Can't open it.\n\n```capture\nhttps://claude.ai/artifact/x\n```") == [.paragraph("Can't open it."), .capture(urls: ["https://claude.ai/artifact/x"])])
     }
+
+    @Test func messagesFromOtherSessionsNameTheirSenderAndPreviewOnOneLine() {
+        #expect(CrewMessage.split("[From the overview session]\nDo **this**\nnow")! == ("the overview session", "Do **this**\nnow"))
+        #expect(CrewMessage.split("[From the Mindmill app] Your reply ended")! == ("the Mindmill app", "Your reply ended"))
+        #expect(CrewMessage.split("[From you, through Login's crew]\nBuild it") == nil)
+        #expect(CrewMessage.split("Just me") == nil)
+        #expect(CrewMessage.sender("the overview session") == "Overview")
+        #expect(CrewMessage.sender("Login (lead)") == "Session “Login” (lead)")
+        #expect(CrewMessage.sender("UI part") == "Session “UI part”")
+        #expect(CrewMessage.preview("**Status:** done\n\n- `a`\n- b") == "Status: done - a - b")
+        #expect(CrewMessage.preview(String(repeating: "x", count: 200)).count == 140)
+    }
 }
+

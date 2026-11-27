@@ -1,21 +1,26 @@
 ---
 name: calendar
-description: Mirror the user's Outlook calendar into the knowledge base as meeting files, so new, moved and cancelled meetings show up in the Mindmill app. Use for "sync my calendar", "update my meetings", from the morning routine, and when the Mindmill app's calendar sync starts it.
+description: Mirror the user's calendar (Outlook or Google Calendar, as set in Mindmill) into the knowledge base as meeting files, so new, moved and cancelled meetings show up in the Mindmill app. Use for "sync my calendar", "update my meetings", from the morning routine, and when the Mindmill app's calendar sync starts it.
 allowed-tools: Bash(kb:*), mcp__claude_ai_Microsoft_365__outlook_calendar_search
 ---
 
 # Sync the calendar
 
 The CLI is `kb` (or `"${CLAUDE_PLUGIN_ROOT}/bin/kb"`). The window is the dates you were given, or today and
-tomorrow.
+tomorrow. `kb tools` says which calendar the user uses; read that one, never another that happens to be connected.
+When none is set, reply `ERROR No calendar is set in Mindmill (Settings → Connections → What you use).`
 
-1. Call `outlook_calendar_search` with `query: "*"`, `afterDateTime: <from>T00:00`,
+1. **Microsoft 365:** call `outlook_calendar_search` with `query: "*"`, `afterDateTime: <from>T00:00`,
    `beforeDateTime: <day after to>T00:00`, `limit: 25`, `order: "oldest"`, `offset: 0`. While the response
    ends with a `nextOffset`, call it again with that offset.
+   **Google Calendar:** list the events in the window with its connector, every page, and map each one to the
+   fields below: `summary` → `subject`, `start`/`end` (`{"dateTime": …}`; an all-day event has only a `date`:
+   `isAllDay: true`), the organizer's display name → `organizerName`, attendees' display names → `namedAttendees`,
+   `location`, `description` → `summary`, `status: cancelled` → `isCancelled`, `htmlLink` → `webLink`.
 2. If the tool is missing, needs sign-in or returns an error, **stop**. Don't run `kb`, since an empty import
-   would mark meetings cancelled. Reply `ERROR <the reason>` and, when it needs sign-in, add: "Run `/mcp` and
-   authenticate claude.ai Microsoft 365."
-3. Pipe the events into the importer with these fields only, values copied exactly from the tool:
+   would mark meetings cancelled. Reply `ERROR <the reason>` and, when it needs sign-in, add how: "Run `/mcp` and
+   sign in to <the connector>."
+3. Pipe the events into the importer with these fields only, values copied exactly from the tool (or mapped as above):
    `id`, `subject`, `start`, `end`, `organizerName`, `namedAttendees` as `[{"name": "…"}]`, `location`,
    `summary`, `isAllDay`, `isCancelled`, `webLink`. **Leave out every email address** (`organizer`,
    `attendees`, the `address` of each attendee): the KB stores names only, and a privacy hook may refuse a

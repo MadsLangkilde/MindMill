@@ -45,6 +45,55 @@ struct ProjectDetectionTests {
         #expect(t.map(\.type) == [.unknown])
     }
 
+    @Test func swiftPackagesBesideAnXcodeAppAreItsModules() {
+        let l = RepoListing(files: [
+            "App/App.xcodeproj/project.pbxproj": "SDKROOT = iphoneos;",
+            "Networking/Package.swift": "let package = Package(\n    name: \"Networking\",\n    platforms: [.iOS(.v17)])",
+            "DesignSystem/Package.swift": "platforms: [.iOS(.v17)]",
+        ])
+        let t = ProjectDetector.detect(l)
+        #expect(t.filter { $0.partOf == nil }.map(\.path) == ["App"], "one app")
+        let modules = t.filter { $0.partOf == "App" }
+        #expect(Set(modules.map(\.path)) == ["Networking", "DesignSystem"])
+        let networking = modules.first { $0.path == "Networking" }
+        #expect(networking?.name == "Networking")
+        #expect(networking?.testCommand?.contains("xcodebuild test -scheme 'Networking'") == true)
+        #expect(networking?.testCommand?.contains("platform=iOS Simulator") == true)
+        let packageOnly = RepoListing(files: ["Package.swift": "platforms: [.iOS(.v17)]"])
+        #expect(ProjectDetector.detect(packageOnly).map(\.type) == [.ios], "a package on its own is still tested")
+    }
+
+    @Test func gradleModulesAreListedUnderTheApp() {
+        let l = RepoListing(files: [
+            "gradlew": "",
+            "settings.gradle.kts": "include(\":app\")\ninclude(\":data:network\")\ninclude(\":domain:rules\")\n",
+            "app/build.gradle.kts": "plugins { alias(libs.plugins.android.application) }",
+            "data/network/build.gradle.kts": "plugins { alias(libs.plugins.android.library) }\nandroid { }",
+            "domain/rules/build.gradle.kts": "plugins { kotlin(\"jvm\") }",
+        ])
+        let t = ProjectDetector.detect(l)
+        #expect(t.filter { $0.partOf == nil }.map(\.type) == [.android])
+        let modules = t.filter { $0.partOf != nil }
+        #expect(modules.map(\.name) == [":data:network", ":domain:rules"])
+        #expect(modules.first?.testCommand == "./gradlew :data:network:testDebugUnitTest")
+        #expect(modules.last?.testCommand == "./gradlew :domain:rules:test")
+    }
+
+    @Test func modulesAreKeptApartFromAppsAndKeepTheirLastRun() throws {
+        let app = DetectedTarget(type: .ios, path: "App", evidence: "Xcode project for iOS")
+        let module = DetectedTarget(type: .ios, path: "Net", evidence: "Swift package of the app", partOf: "App", name: "Net")
+        let targets = [app, module].map { TestTarget($0, repo: "/r", repoTitle: "R") }
+        var plan = ScopeTestPlan()
+        plan.merge(detected: targets)
+        #expect(plan.targets.map(\.path) == ["App"])
+        #expect(plan.modules(of: plan.targets[0].id).map(\.title) == ["Net"])
+        plan.modules[0].lastRun = ModuleRun(built: true, tests: nil)
+        plan.merge(detected: targets)
+        #expect(plan.modules[0].lastRun != nil)
+        let old = #"{"targets":[],"deliverWhen":"everyCheckpoint","dontAsk":false,"suggestions":[]}"#
+        #expect(try JSONDecoder().decode(ScopeTestPlan.self, from: Data(old.utf8)).modules.isEmpty, "plans saved before modules still load")
+    }
+
     @Test func doesNotCountTheSameAppTwice() {
         let l = RepoListing(files: ["build.gradle": "com.android.application", "app/build.gradle": "com.android.application"])
         #expect(ProjectDetector.detect(l).count == 1)
@@ -133,6 +182,17 @@ struct ChecklistTests {
         let items = TestAdapters.checklist(type: .android, method: "companion", context(f, confirmed: ["install-allowed"]))
         #expect(items.first { $0.id == "android-sdk" }?.status == .missing)
         #expect(!ChecklistItem.ready(items))
+    }
+
+    @Test func anAppleAccountInXcodeIsEnoughToSignForTheIPhone() {
+        var f = TestEnvironmentFacts()
+        f.toolchains = ["xcode": "26.6"]
+        f.devices = [.init(id: "1", name: "iPhone", kind: .iphone, paired: true)]
+        let t = TestTarget(type: .ios, repo: "/r", path: "App", title: "App")
+        f.xcodeAccount = false
+        #expect(!ChecklistItem.ready(TestAdapters.checklist(type: .ios, method: "direct", TestContext(facts: f, target: t))))
+        f.xcodeAccount = true
+        #expect(ChecklistItem.ready(TestAdapters.checklist(type: .ios, method: "direct", TestContext(facts: f, target: t))))
     }
 
     @Test func webNeedsAStartCommand() {

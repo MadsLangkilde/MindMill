@@ -50,7 +50,8 @@ public struct SkillInfo: Equatable, Sendable, Identifiable {
 /// The skills and commands of the AI that runs sessions: found in its folders, the user's and each repository's,
 /// and in its installed plugins. Pure over the file system it is given, so it is tested without a real home.
 public enum SkillCatalog {
-    /// The AI's folder names: `~/.claude` and a repository's `.claude` for Claude Code, `.codex` for Codex.
+    /// The AI's folder names: `~/.claude` and a repository's `.claude` for Claude Code, `.agents` for Codex and
+    /// Gemini CLI.
     public struct Home: Equatable, Sendable {
         public var user: URL
         public var projectFolder: String
@@ -61,7 +62,8 @@ public enum SkillCatalog {
         }
 
         public static func of(brain: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Home {
-            brain == "codex" ? Home(user: home.appendingPathComponent(".codex"), projectFolder: ".codex")
+            brain == AIProvider.codex.id || brain == AIProvider.gemini.id
+                ? Home(user: home.appendingPathComponent(".agents"), projectFolder: ".agents")
                 : Home(user: home.appendingPathComponent(".claude"), projectFolder: ".claude")
         }
 

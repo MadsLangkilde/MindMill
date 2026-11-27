@@ -1,6 +1,6 @@
 ---
 name: work-item
-description: Create, draft or propose a PBI, bug or task in the current project's work-item tracker (Azure DevOps, Mindmill's own tracker, or Jira), guided step by step and using what the knowledge base knows about the project. It learns the tracker's organization, project, area, sprints, team and conventions as it goes and asks only for what it can't infer. Use for "create a PBI", "make a bug for this", "add a work item", "turn this follow-up into a PBI", "propose PBIs from this meeting", /create-pbi in a project without its own create-pbi skill, and when the Mindmill app's Create PBI button starts it.
+description: Create, draft or propose a PBI, bug or task in the current project's work-item tracker (the one set for its scope in Mindmill: Azure DevOps, Mindmill's own tracker, Jira, GitHub Issues or Linear), guided step by step and using what the knowledge base knows about the project. It learns the tracker's organization, project, area, sprints, team and conventions as it goes and asks only for what it can't infer. Use for "create a PBI", "make a bug for this", "add a work item", "turn this follow-up into a PBI", "propose PBIs from this meeting", /create-pbi in a project without its own create-pbi skill, and when the Mindmill app's Create PBI button starts it.
 allowed-tools: Bash(kb:*), Bash(git:*), Read, Grep, Glob, AskUserQuestion
 ---
 
@@ -57,8 +57,9 @@ Missing or incomplete? **Infer first, then ask, then save:**
   customers get the `Customer` tag") go in `kb settings set conventions.<key> '"<one sentence>"'`.
 - Never store credentials. Azure DevOps uses the PAT in `~/.git-credentials`.
 
-`tracker.kind` decides where the item goes. Steps 3–9 below are for `azure-devops`; for `local` and `jira`
-see **Local and Jira trackers** at the end, which changes only where the item is looked up and created.
+`tracker.kind` decides where the item goes: always the scope's own tracker, never another one that happens to be
+connected. Steps 3–9 below are for `azure-devops`; for `local`, `jira`, `github` and `linear` see **Other
+trackers** at the end, which changes only where the item is looked up and created.
 
 When a stored value turns out stale (for example `kb tracker sprints` notes that `iteration_root` has no
 current sprint), show what the tracker has now, ask, and save the fix.
@@ -157,7 +158,7 @@ were created from it, pass `--resolved-by` once per URL (they are stored as a li
 Never create a work item without the user's explicit approval in this conversation or a click in the app.
 **Keep as proposal** leaves the backlog entry; it shows in the app's Backlog section with a Create button.
 
-## Local and Jira trackers
+## Other trackers
 
 **`local`** is Mindmill's own tracker (`kb work`, see `docs/format.md`). Items are features, PBIs, bugs and tasks
 (feature → PBI/bug → task). Ask and draft as above, but:
@@ -178,13 +179,17 @@ Never create a work item without the user's explicit approval in this conversati
 - A backlog entry in a local scope (one a meeting proposed) is created with `kb backlog create <id> --yes` instead:
   its `parent` must be a feature in the tracker, and `related` items are linked both ways in `work.json`.
 
-**`jira`**: work goes through Claude's Jira connector, not `kb`. Find its tools (names containing `jira` or
+**`jira`**: work goes through the Atlassian (Jira) connector, not `kb`. Find its tools (names containing `jira` or
 `atlassian`). None connected: say so ("Jira isn't connected in this session; connect it, or keep this as a
 draft") and stop. Otherwise use them for the duplicate check, the parent (an epic) and the sprint, draft in
 chat, and on approval create the issue (Story for a PBI, Bug, Task) with the description and acceptance
 criteria. A backlog entry's `parent` is the epic to put it under, and its `related` items (the issue keys of other
 entries once created, or keys written there) each get a "relates to" link. Then set the entry's `status: created`,
 `work_item` and `url`. Print its key as a link. The same rule holds: no KB ids or local paths in it.
+
+**`github`** and **`linear`**: the same as `jira`, through the GitHub connector (or `gh issue` in the repo) or the
+Linear connector. GitHub has no PBI type: a PBI is an issue, a bug an issue with the `bug` label, a feature a
+milestone or a parent issue, as the repo already does it. Linear: an issue in the scope's team, a feature a project.
 
 ## Proposing from the knowledge base
 

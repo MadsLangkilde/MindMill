@@ -57,9 +57,9 @@ The knowledge base defaults to `~/projects/knowledge`. Change it in `~/.config/k
 | `mindmill:ask` | Answer a question from every source: the knowledge base, code, related projects, wiki, work items, Teams, email, docs, MCP, commands |
 | `mindmill:brief` | What the KB says about the task at hand |
 | `mindmill:decide` | Record a decision, supersede one, or propose one to the inbox |
-| `mindmill:calendar` | Mirror today's and tomorrow's Outlook events as meeting files |
+| `mindmill:calendar` | Mirror today's and tomorrow's events (Outlook or Google Calendar) as meeting files |
 | `mindmill:email` | Propose reminders from new email that needs you, keep open discussions up to date; skip newsletters and notifications |
-| `mindmill:reference` | Save a copy of an email or a Teams chat in References, without email addresses |
+| `mindmill:reference` | Save a copy of an email or a chat (Teams, Slack) in References, without email addresses |
 | `mindmill:discussion` | Track an email thread or chat that isn't settled: points, open questions, findings; file the findings when ready |
 | `mindmill:goals` | Coach personal long-term goals: what it takes, next steps, progress, and proposing progress you made |
 | `mindmill:idea` | Brainstorm ideas and turn them into backlog items, facts, decisions, follow-ups, architecture notes or a new project |
@@ -69,6 +69,7 @@ The knowledge base defaults to `~/projects/knowledge`. Change it in `~/.config/k
 | `mindmill:today` | Morning routine: day plan, prepared meetings, backlog proposals |
 | `mindmill:work-item` | Draft, propose or create PBIs and bugs step by step; learns each project's tracker, sprints, team and conventions |
 | `mindmill:create-pbi` | `/mindmill:create-pbi [<follow-up id>]`: the guided create flow of `mindmill:work-item` |
+| `mindmill:write-as-me` | Write an email, chat message or other text in your style for that receiver, learned from what you sent them |
 | `mindmill:migrate-memory` | Move project knowledge out of auto-memory, in batches you approve |
 
 ## The app's day

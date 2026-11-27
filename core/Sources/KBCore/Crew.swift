@@ -113,6 +113,10 @@ public enum CrewOrder: Equatable, Sendable {
     case stop(to: String, from: String)
     /// The session reached its purpose and the user said to archive it.
     case archive(to: String, from: String)
+    /// The session's work turned out to be a work item (`wi:<n>`) or a pull request (`mypr:<n>`): the app follows it.
+    case link(to: String, about: String, from: String)
+    /// The separate copy of the code the session works in, so its version can be tested.
+    case folder(to: String, path: String, from: String)
     /// A factory session asks the user without blocking.
     case factoryAsk(from: String, text: String, options: [String], checkpoint: String?)
     /// A factory session's progress line.
@@ -149,9 +153,12 @@ public enum CrewOrder: Equatable, Sendable {
         public var about: String?
         public var text: String
         public var from: String
+        /// The repository folder it works in, when that isn't its scope's.
+        public var repo: String?
 
         public init(title: String, parent: String? = nil, lead: Bool = false, project: String? = nil, model: String? = nil,
-                    strategy: String? = nil, about: String? = nil, text: String = "", from: String = "cli") {
+                    strategy: String? = nil, about: String? = nil, text: String = "", from: String = "cli", repo: String? = nil) {
+            self.repo = repo
             self.title = title
             self.parent = parent
             self.lead = lead
@@ -162,6 +169,10 @@ public enum CrewOrder: Equatable, Sendable {
             self.text = text
             self.from = from
         }
+    }
+
+    public static func linkable(_ about: String) -> Bool {
+        ["wi:", "mypr:"].contains { p in about.hasPrefix(p) && Int(about.dropFirst(p.count)).map { $0 > 0 } == true }
     }
 
     public static func parse(_ data: Data) -> CrewOrder? {
@@ -180,13 +191,19 @@ public enum CrewOrder: Equatable, Sendable {
             guard let title = str("title") else { return nil }
             return .start(StartRequest(title: title, parent: str("parent"), lead: (obj["lead"] as? Bool) ?? false,
                                        project: str("project"), model: str("model"), strategy: str("strategy"),
-                                       about: str("about"), text: str("text") ?? "", from: from))
+                                       about: str("about"), text: str("text") ?? "", from: from, repo: str("repo")))
         case "stop":
             guard let to = str("to") else { return nil }
             return .stop(to: to, from: from)
         case "archive":
             guard let to = str("to") else { return nil }
             return .archive(to: to, from: from)
+        case "folder":
+            guard let to = str("to"), let path = str("path"), path.hasPrefix("/") else { return nil }
+            return .folder(to: to, path: path, from: from)
+        case "link":
+            guard let to = str("to"), let about = str("about"), CrewOrder.linkable(about) else { return nil }
+            return .link(to: to, about: about, from: from)
         case "factory_ask":
             guard let text = str("text") else { return nil }
             let options = (obj["options"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }

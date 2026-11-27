@@ -1,6 +1,6 @@
 ---
 name: reference
-description: Save a copy of an email, a Teams conversation or other material in the KB's References so it can be found and read later by Ask, briefs and sessions. Use for "save this email", "keep this thread for later", "add this to references", and when the Mindmill app sends `/mindmill:reference email|teams <scope> <what to look for>`.
+description: Save a copy of an email, a chat conversation (Teams, Slack) or other material in the KB's References so it can be found and read later by Ask, briefs and sessions. Use for "save this email", "keep this thread for later", "add this to references", and when the Mindmill app sends `/mindmill:reference email|teams <scope> <what to look for>`.
 allowed-tools: Bash(kb:*), mcp__claude_ai_Microsoft_365__outlook_email_search, mcp__claude_ai_Microsoft_365__chat_message_search, mcp__claude_ai_Microsoft_365__teams_list_chats, mcp__claude_ai_Microsoft_365__read_resource
 ---
 
@@ -22,9 +22,10 @@ Web pages and artifacts are saved by the app's browser, not by you. You save mai
 
 ## `email <scope> <what to look for>` and `teams <scope> <what to look for>`
 
-1. Search: `outlook_email_search` (or `chat_message_search` for Teams) with the words given. When more than one
+1. Search the user's mail tool (or their chat tool for `teams`, which means any chat), the ones `kb tools` names
+   (Microsoft 365: `outlook_email_search`, `chat_message_search`; Gmail; Slack), with the words given. When more than one
    message or thread fits, ask the user which with choices (subject, sender name, date). None: say so and stop.
-2. Read it in full with `read_resource`. For a thread, keep every message, oldest first.
+2. Read it in full (Microsoft 365: `read_resource`). For a thread, keep every message, oldest first.
 3. Write the copy as plain text: for each message `**<sender name>**, <date>:` then the text. Drop signatures,
    disclaimers, quoted history repeated below, and tracking links. **Remove every email address**, including in
    the text; keep names. Attachments: list their names; you can't save their content.

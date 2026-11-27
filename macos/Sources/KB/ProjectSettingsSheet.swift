@@ -602,6 +602,14 @@ struct ClaudeSettingsView: View {
                 Text("Give a task another model when it does better there: a fast one for live meetings, a small one for calendar sync.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                SkillPlacesView()
+            } header: {
+                Text("Mindmill's skills")
+            } footer: {
+                Text("Each assistant reads skills from its own place. Mindmill puts its skills where the assistants you use read them, and moves them when you change the brain.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("\(model.aiSetup.brainProvider.command) command") {
                 switch model.claudeAvailability {
                 case .resolving: Label("Looking for claude…", systemImage: "hourglass")

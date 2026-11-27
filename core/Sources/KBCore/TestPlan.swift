@@ -26,6 +26,10 @@ public struct TestTarget: Codable, Equatable, Sendable, Identifiable {
     public var serialCommand: String?
     /// Checklist items only the user can tell, ticked.
     public var confirmed: [String] = []
+    /// A module: the id of the app it belongs to.
+    public var partOf: String?
+    /// A module's last build and test.
+    public var lastRun: ModuleRun?
 
     public init(id: String = UUID().uuidString.prefix(8).lowercased(), type: ProjectType, repo: String, path: String, title: String) {
         self.id = id
@@ -41,6 +45,11 @@ public struct TestTarget: Codable, Equatable, Sendable, Identifiable {
         startCommand = d.startCommand
         testCommand = d.testCommand
         if d.type == .android { buildCommand = d.startCommand; startCommand = nil }
+        if let app = d.partOf {
+            partOf = Self.stableID(repo: repo, path: app, type: d.type)
+            title = d.name ?? d.path
+            buildCommand = d.buildCommand
+        }
     }
 
     static func stableID(repo: String, path: String, type: ProjectType) -> String {
@@ -155,9 +164,27 @@ public struct CompatibilityResult: Codable, Equatable, Sendable {
     }
 }
 
+/// A module's last build and test: when, whether it built, and the tests' totals.
+public struct ModuleRun: Codable, Equatable, Sendable {
+    public var at: Date
+    public var built: Bool
+    public var tests: TestRunSummary?
+
+    public init(at: Date = Date(), built: Bool, tests: TestRunSummary?) {
+        self.at = at
+        self.built = built
+        self.tests = tests
+    }
+
+    public var ok: Bool { built && tests?.ok != false }
+}
+
 /// Everything about testing one scope (project).
 public struct ScopeTestPlan: Codable, Equatable, Sendable {
+    /// The apps, sites, services and firmware, each delivered on its own.
     public var targets: [TestTarget] = []
+    /// The apps' modules, built and tested on their own (`partOf` names the app).
+    public var modules: [TestTarget] = []
     public var deliverWhen: DeliverWhen = .everyCheckpoint
     /// "Don't ask for this project": no more prompts from sessions and factories.
     public var dontAsk = false
@@ -165,6 +192,20 @@ public struct ScopeTestPlan: Codable, Equatable, Sendable {
     public var compatibility: CompatibilityResult?
 
     public init() {}
+
+    enum CodingKeys: String, CodingKey { case targets, modules, deliverWhen, dontAsk, suggestions, compatibility }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        targets = try c.decodeIfPresent([TestTarget].self, forKey: .targets) ?? []
+        modules = try c.decodeIfPresent([TestTarget].self, forKey: .modules) ?? []
+        deliverWhen = try c.decodeIfPresent(DeliverWhen.self, forKey: .deliverWhen) ?? .everyCheckpoint
+        dontAsk = try c.decodeIfPresent(Bool.self, forKey: .dontAsk) ?? false
+        suggestions = try c.decodeIfPresent([TestSuggestion].self, forKey: .suggestions) ?? []
+        compatibility = try c.decodeIfPresent(CompatibilityResult.self, forKey: .compatibility)
+    }
+
+    public func modules(of app: String) -> [TestTarget] { modules.filter { $0.partOf == app } }
 
     /// Set up: at least one target and every target has a method.
     public var isSetUp: Bool { !targets.isEmpty && targets.allSatisfy { $0.method != nil } }
@@ -191,9 +232,12 @@ public struct ScopeTestPlan: Codable, Equatable, Sendable {
     /// Merges newly detected targets in: known ones keep their settings, new ones are added, gone ones stay
     /// unless they were never set up.
     public mutating func merge(detected: [TestTarget]) {
-        for d in detected where !targets.contains(where: { $0.id == d.id }) { targets.append(d) }
-        let ids = Set(detected.map(\.id))
+        let apps = detected.filter { $0.partOf == nil }
+        for d in apps where !targets.contains(where: { $0.id == d.id }) { targets.append(d) }
+        let ids = Set(apps.map(\.id))
         targets.removeAll { !ids.contains($0.id) && $0.method == nil }
+        let known = modules
+        modules = detected.filter { $0.partOf != nil }.map { m in known.first { $0.id == m.id } ?? m }
     }
 
     /// The compatibility check should run again: never ran, or the targets or the Mac's tools changed.

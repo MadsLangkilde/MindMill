@@ -35,7 +35,7 @@ public enum AskSubject: Equatable, Sendable {
             if let from = r.from { s += " It came from an email from \(from)." }
             if let reason = r.reason { s += " Why it was suggested: \(reason)" }
             if !r.note.isEmpty { s += "\nNote:\n\(r.note)" }
-            if r.isFromEmail { s += "\nFind the email with outlook_email_search if you need more than this." }
+            if r.isFromEmail { s += "\nFind the email in the user's mail tool (`kb tools`) if you need more than this." }
             return s
         case .text(let text, _, _):
             return "This question is about this item from the user's day plan: \(text)"

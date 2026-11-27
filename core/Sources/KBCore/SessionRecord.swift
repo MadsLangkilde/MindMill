@@ -45,12 +45,18 @@ public struct SessionRecord: Codable, Identifiable, Equatable, Sendable {
     public var archived: Bool?
     /// The app asked once whether this Build session is research and should move to Plan.
     public var researchOffered: Bool?
+    /// What the user asked for when starting it: shown pinned at the top, not as a message.
+    public var brief: String?
+    /// Separate copies of the code the session said it works in (`kb crew folder`), for testing what it built.
+    public var folders: [String]?
 
     public init(id: String = UUID().uuidString.lowercased(), title: String, project: String?, claudeSessionID: String? = nil,
                 workingDirectory: String, created: Date = Date(), updated: Date = Date(), extraTools: [String] = [],
                 messages: [Message] = [], role: SessionRole = .solo, parentID: String? = nil, strategy: String? = nil,
                 model: String? = nil, about: String? = nil, strategyOffered: Bool = false, space: SessionSpace? = nil,
-                archived: Bool? = nil, researchOffered: Bool? = nil) {
+                archived: Bool? = nil, researchOffered: Bool? = nil, brief: String? = nil, folders: [String]? = nil) {
+        self.brief = brief
+        self.folders = folders
         self.archived = archived
         self.researchOffered = researchOffered
         self.id = id
@@ -73,7 +79,7 @@ public struct SessionRecord: Codable, Identifiable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, project, claudeSessionID, workingDirectory, created, updated, extraTools, messages
-        case role, parentID, strategy, model, about, strategyOffered, space, archived, researchOffered
+        case role, parentID, strategy, model, about, strategyOffered, space, archived, researchOffered, brief, folders
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,6 +102,8 @@ public struct SessionRecord: Codable, Identifiable, Equatable, Sendable {
         space = (try? c.decodeIfPresent(SessionSpace.self, forKey: .space)) ?? (role == .solo ? .plan : .build)
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived)
         researchOffered = try c.decodeIfPresent(Bool.self, forKey: .researchOffered)
+        brief = try c.decodeIfPresent(String.self, forKey: .brief)
+        folders = try c.decodeIfPresent([String].self, forKey: .folders)
     }
 
     /// A research's session: kept as long as the research is, whatever its age.

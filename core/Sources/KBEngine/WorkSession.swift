@@ -27,6 +27,13 @@ public final class WorkSession: Identifiable {
     public var space: SessionSpace
     public var archived: Bool?
     public var researchOffered: Bool
+    /// What the user asked for when starting it, pinned at the top of the session instead of shown as a message.
+    public var brief: String?
+    /// Separate copies of the code it said it works in, newest last.
+    public var folders: [String] = []
+    /// Started with Quick Start: unlisted and not kept until something is written in it.
+    public var quickDraft = false
+    public var isEmptyDraft: Bool { quickDraft && chat.items.isEmpty && !chat.isBusy }
     /// Messages from other sessions that arrived during a turn; each is sent when the turn ends.
     public var inbox: [(text: String, display: String)] = []
     /// How to work (a strategy, sessions to start), sent in front of the first message.
@@ -59,6 +66,8 @@ public final class WorkSession: Identifiable {
         space = record.space
         archived = record.archived
         researchOffered = record.researchOffered ?? false
+        brief = record.brief
+        folders = record.folders ?? []
         chat.showsTools = true
         chat.items = record.messages.map {
             ClaudeChat.Item(role: ClaudeChat.Role(rawValue: $0.role) ?? .status, text: $0.text, attachments: $0.attachments ?? [], at: $0.at)
@@ -71,7 +80,8 @@ public final class WorkSession: Identifiable {
                       messages: chat.items.filter { $0.role != .status }.map { .init(role: $0.role.rawValue, text: $0.text, attachments: $0.attachments.isEmpty ? nil : $0.attachments, at: $0.at) },
                       role: role, parentID: parentID, strategy: strategy, model: model, about: about,
                       strategyOffered: strategyOffered, space: space, archived: archived,
-                      researchOffered: researchOffered ? true : nil)
+                      researchOffered: researchOffered ? true : nil, brief: brief,
+                      folders: folders.isEmpty ? nil : folders)
     }
 
     /// The last assistant message, when the conversation is waiting on the user.

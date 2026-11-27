@@ -96,7 +96,9 @@ extension AppModel {
         if completeWorkItems { args.append("--complete-work-items") }
         if !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { args += ["--message", message] }
         if auto { args.append("--auto") }
+        notice = auto ? "Setting !\(id) to complete by itself…" : "Completing !\(id)…"
         prAction(id, args, done: auto ? "!\(id) completes by itself when its checks pass." : "!\(id) completed.", refreshAll: true) { [weak self] in
+            self?.prsCompletedHere.insert(id)
             guard !auto else { return }
             self?.offerCleanup(id)
         }

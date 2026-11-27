@@ -55,6 +55,7 @@ struct SessionStartView: View {
         ("Create a PBI or bug", "plus.rectangle.on.rectangle", "/mindmill:create-pbi"),
         ("Plan my day", "sun.max", "/mindmill:today"),
         ("Brief me on the project", "doc.text.magnifyingglass", "/mindmill:brief"),
+        ("Write as me", "pencil.and.scribble", "/mindmill:write-as-me"),
     ]
 
     var body: some View {
@@ -121,6 +122,8 @@ struct SessionView: View {
     @FocusState private var findFocused: Bool
     /// The conversation is scrolled to (near) its end; new output keeps it there. Scrolled up, a bar offers the way back.
     @State private var atEnd = true
+    /// How many of the latest message groups are drawn; "Show Earlier" raises it.
+    @State private var shownGroups = SessionTranscriptWindow.initial
     @State private var newBelow = false
     @State private var jumpToEnd = 0
 
@@ -135,6 +138,7 @@ struct SessionView: View {
                 MergeConflictBanner(pr: pr, session: session)
             }
             if session.space == .plan { CreatedItemsBar(session: session) }
+            if let brief = session.brief { SessionBriefHeader(title: session.title, brief: brief) }
             if hasWaitingPanel, waitingDock == .top { waitingPanel }
             transcript
                 .environment(\.captureTarget, .session(session.id))
@@ -371,18 +375,26 @@ struct SessionView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                // A plain stack: a lazy one leaves the view blank when its height changes while anchored at the
+                // bottom (the input shrinking, a reply growing). Only the latest groups are drawn, to keep it light.
+                VStack(alignment: .leading, spacing: 16) {
                     if session.chat.items.isEmpty && !session.chat.isBusy {
                         if session.role == .overseer { OverviewEmptyState() } else { emptyState }
                     }
                     let matches = finding ? findMatches : []
                     let current = matches.isEmpty ? nil : matches[min(findIndex, matches.count - 1)]
-                    let shown = groups
+                    let all = groups
+                    let shown = finding ? all : Array(all.suffix(shownGroups))
+                    if shown.count < all.count {
+                        Button("Show Earlier Messages (\(all.count - shown.count))") { shownGroups += SessionTranscriptWindow.step }
+                            .buttonStyle(.borderless)
+                            .frame(maxWidth: .infinity)
+                    }
                     let marks = TranscriptTimes.marks(shown.map(\.timeEntry))
                     ForEach(Array(shown.enumerated()), id: \.element.id) { i, group in
                         VStack(alignment: .leading, spacing: 5) {
                             if let day = marks[i].day { DayHeading(title: day).padding(.bottom, 4) }
-                            groupView(group).id(group.id)
+                            groupView(group, isLast: group.id == all.last?.id).id(group.id)
                                 .padding(matches.contains(group.id) ? 6 : 0)
                                 .background {
                                     if matches.contains(group.id) {
@@ -432,6 +444,8 @@ struct SessionView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
             }
             .onAppear { scrollToEnd(proxy, animated: false) }
+            .onChange(of: session.id) { _, _ in shownGroups = SessionTranscriptWindow.initial }
+            .onChange(of: session.input.isEmpty) { _, _ in if atEnd && !finding { scrollToEnd(proxy, animated: false) } }
         }
     }
 
@@ -487,28 +501,41 @@ struct SessionView: View {
     private struct Group: Identifiable {
         let id: UUID
         let items: [ClaudeChat.Item]
+        /// For a reply, the options the user picked from its choices.
+        var picks: Set<String>?
         var isTools: Bool { items.first?.role == .tool }
 
         var timeEntry: TranscriptTimes.Entry { items.first?.timeEntry ?? .init(at: nil, side: .other) }
     }
 
-    /// Consecutive tool calls fold into one group.
+    /// Which messages of the user only answered a reply's choices: hidden, with the option marked in the reply.
+    private var answered: ChoiceAnswer.Answered {
+        ChoiceAnswer.answered(session.chat.items.map { item in
+            (item.id, item.role == .user ? .user : item.role == .assistant ? .reply : .other, item.text)
+        })
+    }
+
+    /// Consecutive tool calls fold into one group; answers to a reply's choices show in the reply instead.
     private var groups: [Group] {
         var out: [Group] = []
-        for item in session.chat.items {
+        let answered = answered
+        let brief = session.brief?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let briefItem = session.chat.items.first { $0.role == .user }
+            .flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == brief ? $0.id : nil }
+        for item in session.chat.items where item.id != briefItem && (!answered.answers.contains(item.id) || !item.attachments.isEmpty) {
             if item.role == .tool, let last = out.last, last.isTools {
                 out[out.count - 1] = Group(id: last.id, items: last.items + [item])
             } else {
-                out.append(Group(id: item.id, items: [item]))
+                out.append(Group(id: item.id, items: [item], picks: answered.picks[item.id]))
             }
         }
         return out
     }
 
     @ViewBuilder
-    private func groupView(_ group: Group) -> some View {
+    private func groupView(_ group: Group, isLast: Bool) -> some View {
         if group.isTools {
-            ToolSteps(items: group.items, running: session.chat.isBusy && group.id == groups.last?.id)
+            ToolSteps(items: group.items, running: session.chat.isBusy && isLast)
                 .help(TranscriptTimes.span(group.items.compactMap(\.at)).map { "Ran at \($0)" } ?? "")
         } else if let item = group.items.first {
             switch item.role {
@@ -529,7 +556,7 @@ struct SessionView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             case .assistant:
-                MarkdownDocument(text: item.text, choices: choicesHandler(for: item))
+                MarkdownDocument(text: item.text, choices: choicesHandler(for: item), answered: group.picks)
             case .error:
                 VStack(alignment: .leading, spacing: 6) {
                     Label(item.text, systemImage: "exclamationmark.triangle.fill")
@@ -586,22 +613,30 @@ struct SessionView: View {
             AdaptiveCardLayout(spacing: 10, stackedSpacing: 8, minInfoWidth: 220) {
                 Image(systemName: "checkmark.seal.fill").foregroundStyle(.green).font(.title3)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("!\(String(pr.id)) is ready to complete. Complete it now?").font(.callout.weight(.semibold))
+                    Text("!\(String(pr.id)) in \(pr.repo) is ready to complete. Complete it now?").font(.callout.weight(.semibold))
                         .fixedSize(horizontal: false, vertical: true)
                     Text(pr.title).font(.caption).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Text(detail(pr, from: item.session))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
-                    Button("Not Now") { model.completeAsksDeclined.insert(pr.id) }
-                        .help("Stop asking in this session until Mindmill restarts. Complete stays in the session's menu.")
-                    Button("Open PR") { model.openPRInBuild(pr.id) }
-                    Button("Complete…") { model.completePRRequest = CompletePRRequest(id: pr.id) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
+                if model.prBusy.contains(pr.id) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Completing…").font(.callout).foregroundStyle(.secondary)
+                    }
+                    .fixedSize()
+                } else {
+                    HStack(spacing: 8) {
+                        Button("Not Now") { model.completeAsksDeclined.insert(pr.id) }
+                            .help("Stop asking in this session until Mindmill restarts. Complete stays in the session's menu.")
+                        Button("Open PR") { model.openPRInBuild(pr.id) }
+                        Button("Complete…") { model.completePRRequest = CompletePRRequest(id: pr.id) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                    }
+                    .fixedSize()
                 }
-                .fixedSize()
             }
             .padding(12)
             .background(Color.green.opacity(0.08))
@@ -610,7 +645,7 @@ struct SessionView: View {
     }
 
     private func detail(_ pr: PullRequest, from: WorkSession) -> String {
-        var parts = ["\(pr.approvals) approval\(pr.approvals == 1 ? "" : "s")", "checks passed", "no open comments", pr.repo]
+        var parts = ["\(pr.approvals) approval\(pr.approvals == 1 ? "" : "s")", "checks passed", "no open comments"]
         if from.id != session.id { parts.insert("From “\(SessionTitle.split(from.title).text)”", at: 0) }
         return parts.joined(separator: " · ")
     }
@@ -728,7 +763,7 @@ struct SessionView: View {
                     suggestionIndex = 0
                     if new.hasPrefix("/") { loadSkills() }
                 }
-                .promptKeys($session.input, paused: !suggestions.isEmpty)
+                .promptKeys($session.input, paused: !suggestions.isEmpty, history: PromptHistory(sessionMessages: session.chat.items.filter { $0.role == .user }.map(\.text)))
                 .pastesAttachments(active: inputFocused) { model.attachFromPasteboard($0, to: session) }
             Button { model.pickAttachments(for: session) } label: { Image(systemName: "paperclip") }
                 .buttonStyle(.borderless)
@@ -916,39 +951,85 @@ struct ToolSteps: View {
     }
 }
 
-/// What the user sent, or a message from another session (✉), in a bubble on the right. Markdown shows
-/// formatted, code in a box, and a session's message gets its sender on top and its option lists on lines.
+/// What the user sent, in a bubble on the right; a message from another session, the overview or the app goes to
+/// `CrewMessageView` instead. Markdown shows formatted and code in a box.
 struct UserMessageView: View {
     let text: String
     var minLeading: CGFloat = 80
     @Environment(\.findHighlight) private var highlight
 
     var body: some View {
-        HStack {
-            Spacer(minLength: minLeading)
-            VStack(alignment: .leading, spacing: 6) {
-                if let m = CrewMessage.split(text) {
-                    Label { Text(AttributedString(m.from).highlighting(highlight)) } icon: { Image(systemName: "envelope.fill") }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    MarkdownDocument(text: CrewMessage.readable(m.text))
-                } else if Self.isPlain(text) {
-                    Text(AttributedString(text).highlighting(highlight)).textSelection(.enabled)
-                } else {
-                    MarkdownDocument(text: text)
+        if let m = CrewMessage.split(text) {
+            CrewMessageView(from: m.from, text: m.text, minTrailing: minLeading)
+        } else {
+            HStack {
+                Spacer(minLength: minLeading)
+                Group {
+                    if Self.isPlain(text) {
+                        Text(AttributedString(text).highlighting(highlight)).textSelection(.enabled)
+                    } else {
+                        MarkdownDocument(text: text)
+                    }
                 }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
-            .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     /// One short line without markup reads best as it is, and keeps the bubble narrow.
     static func isPlain(_ s: String) -> Bool {
         !s.contains("\n") && !s.contains("`") && !s.contains("**") && !s.contains("|")
+    }
+}
+
+/// A message another session, the overview session or Mindmill sent into this conversation: on the left, since the
+/// user didn't write it, folded to its sender and first words until opened, and formatted when open. While finding,
+/// one that holds the text opens by itself.
+struct CrewMessageView: View {
+    let from: String
+    let text: String
+    var minTrailing: CGFloat = 80
+    @State private var expanded = false
+    @Environment(\.findHighlight) private var highlight
+
+    var body: some View {
+        let open = expanded || (!highlight.isEmpty && !TextFind.ranges(of: highlight, in: text).isEmpty)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { expanded.toggle() } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: open ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .frame(width: 10)
+                        Image(systemName: "envelope.fill").font(.caption)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("From \(CrewMessage.sender(from))").font(.caption.weight(.semibold))
+                            if !open {
+                                Text(CrewMessage.preview(text)).font(.caption).lineLimit(1).truncationMode(.tail)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(open ? "Fold it" : "Show the whole message")
+                if open {
+                    MarkdownDocument(text: CrewMessage.readable(text))
+                        .padding(.leading, 16)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.18)))
+            Spacer(minLength: minTrailing)
+        }
     }
 }
 
@@ -1045,5 +1126,43 @@ struct SkillSuggestionRow: View {
         case .plugin: return s.plugin ?? "Plugin"
         case .command: return s.plugin ?? "Built in"
         }
+    }
+}
+
+enum SessionTranscriptWindow {
+    static let initial = 80
+    static let step = 80
+}
+
+/// The title and what the user asked for, pinned at the top of a session started with a brief, instead of the brief
+/// showing as the first message. A long brief folds to a few lines.
+struct SessionBriefHeader: View {
+    let title: String
+    let brief: String
+    @State private var expanded = false
+
+    var body: some View {
+        let long = brief.count > 280 || brief.components(separatedBy: "\n").count > 4
+        VStack(spacing: 4) {
+            Text(SessionTitle.split(title).text).font(.headline).multilineTextAlignment(.center)
+            Text(brief)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(expanded ? nil : 4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if long {
+                Button(expanded ? "Show Less" : "Show All") { expanded.toggle() }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+        }
+        .frame(maxWidth: 620)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.secondary.opacity(0.05))
+        .overlay(alignment: .bottom) { Divider() }
     }
 }

@@ -600,6 +600,25 @@ struct NewLeadSheet: View {
         let parent = model.session(request.parent)
         VStack(alignment: .leading, spacing: 14) {
             Text(parent.map { "Add a Session Under “\($0.title)”" } ?? "New Session").font(.title3.weight(.semibold))
+            if parent == nil {
+                AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 220) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Just start").fontWeight(.medium)
+                        Text("A blank session in \(model.index.project(request.project ?? "")?.title ?? "this scope"). It gets its title from what you write first, and goes away if you write nothing.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        model.quickStartSession(project: request.project)
+                        dismiss()
+                    } label: { Label("Quick Start", systemImage: "bolt.fill") }
+                        .buttonStyle(.borderedProminent)
+                        .fixedSize()
+                }
+                .padding(10)
+                .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+                Text("Or set it up:").font(.callout.weight(.medium)).padding(.top, 2)
+            }
             Text(parent == nil
                  ? "A session works in the project's code. Give it sessions under it, or a strategy that starts them, and it leads them."
                  : "The session works in the lead's project and reports to the lead.")

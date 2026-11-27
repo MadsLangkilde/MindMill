@@ -25,7 +25,11 @@ private struct PromptKeys: ViewModifier {
     @Binding var text: String
     /// While a suggestion list uses the arrows.
     let paused: Bool
+    /// The prompts ↑ walks back through: a session's own messages; the app-wide history when nil.
+    let own: PromptHistory?
     @State private var recall = PromptRecall()
+
+    private var history: PromptHistory { own ?? model.promptHistory }
 
     func body(content: Content) -> some View {
         content
@@ -40,14 +44,14 @@ private struct PromptKeys: ViewModifier {
             }
             .onKeyPress(.upArrow) {
                 let caret = FieldEditor.current?.selectedRange().location ?? (text.isEmpty ? 0 : (text as NSString).length)
-                guard !paused, recall.takesUp(text: text, caret: caret, in: model.promptHistory) else { return .ignored }
-                if let older = recall.older(current: text, in: model.promptHistory) { show(older) }
+                guard !paused, recall.takesUp(text: text, caret: caret, in: history) else { return .ignored }
+                if let older = recall.older(current: text, in: history) { show(older) }
                 return .handled
             }
             .onKeyPress(.downArrow) {
                 let caret = FieldEditor.current.map { NSMaxRange($0.selectedRange()) } ?? (text as NSString).length
-                guard !paused, recall.takesDown(text: text, caret: caret, in: model.promptHistory) else { return .ignored }
-                if let newer = recall.newer(in: model.promptHistory) { show(newer) }
+                guard !paused, recall.takesDown(text: text, caret: caret, in: history) else { return .ignored }
+                if let newer = recall.newer(in: history) { show(newer) }
                 return .handled
             }
             .onChange(of: text) { _, new in
@@ -64,7 +68,7 @@ private struct PromptKeys: ViewModifier {
 }
 
 extension View {
-    func promptKeys(_ text: Binding<String>, paused: Bool = false) -> some View {
-        modifier(PromptKeys(text: text, paused: paused))
+    func promptKeys(_ text: Binding<String>, paused: Bool = false, history: PromptHistory? = nil) -> some View {
+        modifier(PromptKeys(text: text, paused: paused, own: history))
     }
 }

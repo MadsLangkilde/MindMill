@@ -87,6 +87,8 @@ public struct AISetup: Codable, Equatable, Sendable {
 
     public var brain: String
     public var tasks: [AITask: Assignment]
+    /// Assistants to put Mindmill's skills in besides those in use (`AssistantSkills`), to use them there directly.
+    public var skillsIn: [String]?
 
     public init(brain: String = AIProvider.claudeCode.id, tasks: [AITask: Assignment] = [:]) {
         self.brain = brain
@@ -246,6 +248,7 @@ public enum SourceSetup {
                        + "\n\nFor one that isn't connected, send me to claude.ai → Settings → Connectors, or for a tool with its own MCP address, to Mindmill's Settings → Connections → Add a Tool. One that needs signing in again: Settings → Connections → Sign In.")
         }
 
+        out.append("Mindmill's skills use the tools saved with `kb tools` (mail, chat, calendar, documents) and each scope's tracker. When I tell you I use a different one for something, save it with `kb tools set <area> <tool>`.")
         out.append("End with a short table: each tool, whether it works now, and what is left for me to do.")
         return out.joined(separator: "\n\n")
     }

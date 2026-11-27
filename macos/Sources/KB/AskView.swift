@@ -17,6 +17,10 @@ final class AskConversation {
         var error: String?
         var savedAs: String?
         var saving = false
+        /// Asked by clicking one of the previous answer's choices: shown there as picked, not as a question.
+        var viaChoice = false
+        /// The options picked from this answer's choices.
+        var picked: Set<String>?
     }
 
     let project: String
@@ -34,7 +38,14 @@ final class AskConversation {
         chat.onEvent = { [weak self] in self?.handle($0) }
     }
 
-    func ask(_ question: String, model: AppModel) {
+    /// Answers the choices at the end of an answer: the option shows picked there, and goes to Claude as the next question.
+    func choose(_ option: String, after turnID: UUID, model: AppModel) {
+        guard let i = turns.firstIndex(where: { $0.id == turnID }) else { return }
+        turns[i].picked = Set(option.components(separatedBy: ", "))
+        ask(option, model: model, viaChoice: true)
+    }
+
+    func ask(_ question: String, model: AppModel, viaChoice: Bool = false) {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         let configured = model.configuredSources(project: project).map(\.source).filter(\.enabled)
@@ -55,7 +66,8 @@ final class AskConversation {
             chat.send(ClaudeModes.warmup, tag: "connect", show: false)
         }
         let about = subject
-        let turn = Turn(question: about.map { "About “\($0.title)”: \(q)" } ?? q, sources: chosen)
+        var turn = Turn(question: about.map { "About “\($0.title)”: \(q)" } ?? q, sources: chosen)
+        turn.viaChoice = viaChoice
         turns.append(turn)
         updated = Date()
         input = ""
@@ -254,11 +266,14 @@ struct SourceChips: View {
 
 struct AskTurnView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.chooseLink) private var chooseLink
     let conversation: AskConversation
     let turn: AskConversation.Turn
+    @State private var multiPicked: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !turn.viaChoice {
             HStack(alignment: .top) {
                 Spacer(minLength: 60)
                 VStack(alignment: .trailing, spacing: 3) {
@@ -272,10 +287,11 @@ struct AskTurnView: View {
                     }
                 }
             }
+            }
             if let error = turn.error {
                 Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.callout).textSelection(.enabled)
             } else if let answer = turn.answer {
-                Text(InlineMarkdown.attributed(answer.body, citationLinks: true))
+                Text(InlineMarkdown.attributed(ChoiceAnswer.withoutChoices(answer.body), citationLinks: true))
                     .textSelection(.enabled)
                     .lineSpacing(2)
                     .environment(\.openURL, OpenURLAction { url in
@@ -284,8 +300,15 @@ struct AskTurnView: View {
                             CitationOpener.open(c, model: model)
                             return .handled
                         }
+                        if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                            chooseLink(url)
+                            return .handled
+                        }
                         return .systemAction
                     })
+                if let c = MarkdownBlocks.trailingChoices(answer.body) {
+                    ChoicesView(multi: c.multi, options: c.options, handler: handler(multi: c.multi), answered: turn.picked)
+                }
                 if !answer.citations.isEmpty {
                     FlowLayout(spacing: 6) {
                         ForEach(answer.citations) { c in CitationChip(citation: c) }
@@ -334,6 +357,19 @@ enum ToolName {
             return parts.dropFirst().joined(separator: " ")
         }
         return name
+    }
+}
+
+extension AskTurnView {
+    /// Live only on the last answer, while nothing is picked and no question runs.
+    func handler(multi: Bool) -> ChoiceHandler? {
+        guard turn.picked == nil, conversation.turns.last?.id == turn.id, !conversation.chat.isBusy else { return nil }
+        let id = turn.id
+        return ChoiceHandler(
+            multi: multi,
+            picked: multiPicked,
+            toggle: { o in if multiPicked.contains(o) { multiPicked.remove(o) } else { multiPicked.insert(o) } },
+            choose: { answer in conversation.choose(answer, after: id, model: model) })
     }
 }
 

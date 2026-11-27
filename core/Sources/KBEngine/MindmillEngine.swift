@@ -96,7 +96,10 @@ public final class MindmillEngine {
     public var shell: LoginShell.Resolved?
     /// The brain and the model for each task (Settings → AI), saved in the platform's preferences.
     public var aiSetup: AISetup {
-        didSet { aiSetup.save(defaults: platform.defaults) }
+        didSet {
+            aiSetup.save(defaults: platform.defaults)
+            if AssistantSkills.providers(aiSetup) != AssistantSkills.providers(oldValue) { placeSkills() }
+        }
     }
     /// Spoken conversations by id, and the realtime relays of those on an API engine.
     public var voiceConversations: [String: VoiceConversation] = [:]
@@ -314,6 +317,7 @@ public final class MindmillEngine {
 
     /// Watches the knowledge base folder and every repository's `knowledgebase/` folder that exists.
     public func startWatching() {
+        placeSkills()
         watcher?.stop()
         watcher = nil
         teamWatchers.forEach { $0.stop() }

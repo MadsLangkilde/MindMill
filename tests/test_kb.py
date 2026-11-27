@@ -2220,6 +2220,30 @@ class CrewTest(KbTestCase):
         o = self.orders()[0]
         self.assertEqual((o["kind"], o["to"], o["from"]), ("archive", self.SOLO, self.SOLO))
 
+    def test_tools_says_which_tools_the_user_uses(self):
+        r = self.cli("tools")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Mail: not set", r.stdout)
+        self.assertEqual(self.cli("tools", "set", "mail", "m365").returncode, 0)
+        self.assertEqual(self.cli("tools", "set", "docs", "m365", "figma").returncode, 0)
+        self.assertNotEqual(self.cli("tools", "set", "chat", "google").returncode, 0)
+        out = json.loads(self.cli("tools", "--json").stdout)
+        self.assertEqual([t["id"] for t in out["areas"]["mail"]], ["m365"])
+        self.assertEqual([t["id"] for t in out["areas"]["docs"]], ["m365", "figma"])
+        self.assertIn("sentitems", self.cli("tools").stdout)
+        self.assertEqual(self.cli("tools", "set", "mail", "none").returncode, 0)
+        self.assertIn("Mail: not set", self.cli("tools").stdout)
+
+    def test_link_ties_a_session_to_its_work(self):
+        self.env["KB_SESSION_ID"] = self.SOLO
+        r = self.cli("crew", "link", "me", "--pr", "42")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("pull request !42", r.stdout)
+        self.assertEqual(self.cli("crew", "link", "me", "--work-item", "7").returncode, 0)
+        o = self.orders()
+        self.assertEqual([(x["kind"], x["to"], x["about"]) for x in o], [("link", self.SOLO, "mypr:42"), ("link", self.SOLO, "wi:7")])
+        self.assertNotEqual(self.cli("crew", "link", "me").returncode, 0)
+
     def test_factory_ask_and_log_write_orders(self):
         self.env["KB_SESSION_ID"] = self.LEAD
         r = self.cli("crew", "status")

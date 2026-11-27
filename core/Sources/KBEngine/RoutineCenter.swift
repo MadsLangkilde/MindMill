@@ -79,7 +79,7 @@ public final class RoutineCenter {
         let to = requestedTo ?? KBDate.today(Calendar(identifier: .gregorian).date(byAdding: .day, value: Self.calendarDaysAhead, to: Date()) ?? Date())
         guard let launch = engine.launch(prompt: ClaudeModes.calendar(from: from, to: to), sessionID: UUID().uuidString.lowercased(),
                                          resume: false, model: engine.model(for: .calendar), cwd: engine.rootURL,
-                                         tools: ["Bash(kb:*)", "Bash(python3:*)", "mcp__claude_ai_Microsoft_365__outlook_calendar_search"]) else { return false }
+                                         tools: ["Bash(kb:*)", "Bash(python3:*)"] + UserTools.readTools(.calendar)) else { return false }
         calendar.onEvent = { [weak self] event in self?.calendarEvent(event) }
         do {
             try calendar.start(launch, mode: "calendar")
@@ -147,8 +147,7 @@ public final class RoutineCenter {
         guard !email.isRunning, !morning.isBusy else { return false }
         guard let launch = engine.launch(prompt: ClaudeModes.email, sessionID: UUID().uuidString.lowercased(), resume: false,
                                          model: engine.model(for: .work), cwd: engine.rootURL,
-                                         tools: ["Bash(kb:*)", "Read", "Edit", "mcp__claude_ai_Microsoft_365__outlook_email_search",
-                                                 "mcp__claude_ai_Microsoft_365__read_resource"]) else {
+                                         tools: ["Bash(kb:*)", "Read", "Edit"] + UserTools.readTools(.mail)) else {
             engine.report(engine.claudeMissingExplanation, error: true)
             return false
         }

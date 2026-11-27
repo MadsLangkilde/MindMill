@@ -21,7 +21,9 @@ extension AppModel {
 
     func linkedPR(_ s: WorkSession) -> PullRequest? { engine.sessions.linkedPR(s) }
 
-    func readyPRs(_ s: WorkSession) -> [(pr: PullRequest, session: WorkSession)] { engine.sessions.readyPRs(s) }
+    func readyPRs(_ s: WorkSession) -> [(pr: PullRequest, session: WorkSession)] {
+        engine.sessions.readyPRs(s).filter { !prsCompletedHere.contains($0.pr.id) }
+    }
 
     var stuckPRs: [PullRequest] { engine.sessions.stuckPRs }
 

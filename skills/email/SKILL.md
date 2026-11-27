@@ -17,11 +17,14 @@ words the user never wants), and `reminder_sources` (emails already turned into 
 
 ## 2. Read the new mail
 
-`outlook_email_search` for messages received after `since` in the inbox, newest first, 25 per page, at most
-4 pages. Read a message in full (`read_resource`) only when the preview isn't enough to judge it.
+Read the mail tool `kb tools` names, never another that happens to be connected (none set: reply
+`ERROR No mail tool is set in Mindmill (Settings → Connections → What you use).`). Search for messages received
+after `since` in the inbox, newest first, 25 per page, at most 4 pages (Microsoft 365: `outlook_email_search`;
+Gmail: a search like `in:inbox after:<date>`). Read a message in full (Microsoft 365: `read_resource`) only
+when the preview isn't enough to judge it.
 
-If the tool is missing, needs sign-in or fails, stop and reply `ERROR <reason>` (add "Run `/mcp` and
-authenticate claude.ai Microsoft 365" when it needs sign-in). Don't run `kb email scanned`.
+If the tool is missing, needs sign-in or fails, stop and reply `ERROR <reason>` (add "Run `/mcp` and sign in to
+<the connector>" when it needs sign-in). Don't run `kb email scanned`.
 
 ## 3. Keep or skip
 

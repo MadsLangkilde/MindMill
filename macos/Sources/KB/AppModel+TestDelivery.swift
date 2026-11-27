@@ -96,6 +96,11 @@ final class MacTestPlatform: TestPlatform {
                 return String(line[line.index(after: a)..<b])
             }
         }
+        if let x = await sh("defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists 2>/dev/null") {
+            f.xcodeAccount = !x.filter { !$0.isWhitespace }.contains("=();")
+        } else if tools["xcode"] != nil {
+            f.xcodeAccount = false
+        }
         let keyDirs = ["~/.appstoreconnect/private_keys", "~/private_keys", "~/.private_keys"].map { KBConfig.expandTilde($0) }
         f.appStoreConnectKey = keyDirs.contains { dir in
             ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).contains { $0.hasPrefix("AuthKey_") && $0.hasSuffix(".p8") }
@@ -126,7 +131,7 @@ final class MacTestPlatform: TestPlatform {
             step("Building for the iPhone…")
             guard let scheme = await iosScheme(t, run: run) else { return failed(&d, "Couldn't find an Xcode scheme. Set it under More options.", log) }
             let derived = dir.appendingPathComponent("dd").path
-            let build = await run("xcodebuild \(xcodeContainer(cwd)) -scheme \(TestShell.quote(scheme)) -destination 'id=\(device)' -configuration Debug -derivedDataPath \(TestShell.quote(derived)) -allowProvisioningUpdates build")
+            let build = await run("xcodebuild \(xcodeContainer(cwd)) -scheme \(TestShell.quote(scheme)) -destination 'id=\(device)' -configuration Debug -derivedDataPath \(TestShell.quote(derived)) -allowProvisioningUpdates -allowProvisioningDeviceRegistration build")
             guard build.code == 0, let app = TestRunner.newestFile(in: URL(fileURLWithPath: derived).appendingPathComponent("Build/Products"), suffix: ".app", after: .distantPast, directories: true)
             else { return failed(&d, "The iOS build failed. See the log in Test.", log) }
             step("Installing on the iPhone…")
@@ -143,7 +148,7 @@ final class MacTestPlatform: TestPlatform {
             guard let scheme = await iosScheme(t, run: run) else { return failed(&d, "Couldn't find an Xcode scheme. Set it under More options.", log) }
             step("Archiving…")
             let archive = dir.appendingPathComponent("App.xcarchive").path
-            let a = await run("xcodebuild \(xcodeContainer(cwd)) -scheme \(TestShell.quote(scheme)) -configuration Release -destination 'generic/platform=iOS' -archivePath \(TestShell.quote(archive)) -allowProvisioningUpdates archive")
+            let a = await run("xcodebuild \(xcodeContainer(cwd)) -scheme \(TestShell.quote(scheme)) -configuration Release -destination 'generic/platform=iOS' -archivePath \(TestShell.quote(archive)) -allowProvisioningUpdates -allowProvisioningDeviceRegistration archive")
             guard a.code == 0 else { return failed(&d, "Archiving failed. See the log in Test.", log) }
             let options = dir.appendingPathComponent("ExportOptions.plist")
             try? DeliveryFiles.exportOptions(testflight: method.kind == .testflight).write(to: options, atomically: true, encoding: .utf8)
@@ -217,7 +222,13 @@ final class MacTestPlatform: TestPlatform {
         guard let start = r.output.firstIndex(of: "{"),
               let obj = try? JSONSerialization.jsonObject(with: Data(r.output[start...].utf8)) as? [String: Any] else { return nil }
         let info = (obj["workspace"] ?? obj["project"]) as? [String: Any]
-        return (info?["schemes"] as? [String])?.first
+        let schemes = info?["schemes"] as? [String] ?? []
+        let dir = targetDirectory(t)
+        let items = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        let project = items.first { $0.hasSuffix(".xcodeproj") }
+        let pbx = project.flatMap { try? String(contentsOf: dir.appendingPathComponent($0).appendingPathComponent("project.pbxproj"), encoding: .utf8) } ?? ""
+        return XcodeSchemes.pick(schemes, appTargets: XcodeSchemes.appTargets(pbxproj: pbx),
+                                 project: project.map { String($0.dropLast(".xcodeproj".count)) })
     }
 
     private func xcodeContainer(_ dir: URL) -> String {

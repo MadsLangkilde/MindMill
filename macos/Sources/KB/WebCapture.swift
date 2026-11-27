@@ -213,6 +213,7 @@ struct WebCaptureView: View {
     @StateObject private var frames = CapturedFrames()
     @State private var webView: WKWebView?
     @State private var savingReference = false
+    @State private var copiedLink = false
 
     var body: some View {
         if let request = model.captureRequests[requestID] {
@@ -229,6 +230,22 @@ struct WebCaptureView: View {
                         .buttonStyle(.borderless)
                     Text(webView?.url?.absoluteString ?? request.url.absoluteString)
                         .font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString((webView?.url ?? request.url).absoluteString, forType: .string)
+                        copiedLink = true
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            copiedLink = false
+                        }
+                    } label: { Label(copiedLink ? "Copied" : "Copy Link", systemImage: copiedLink ? "checkmark" : "link") }
+                        .buttonStyle(.borderless)
+                        .fixedSize()
+                        .help("Copy this page's address")
+                    Button { NSWorkspace.shared.open(webView?.url ?? request.url) } label: { Image(systemName: "safari") }
+                        .buttonStyle(.borderless)
+                        .help("Open this page in your browser")
                     Spacer(minLength: 8)
                     Text(words == 0 ? "Loading…" : "\(words) words on the page").font(.caption).foregroundStyle(.secondary)
                         .monospacedDigit().fixedSize()

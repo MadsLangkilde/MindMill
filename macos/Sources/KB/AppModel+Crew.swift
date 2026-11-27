@@ -66,6 +66,13 @@ extension AppModel {
 
     func userAnswered(_ s: WorkSession, _ text: String) { engine.sessions.userAnswered(s, text) }
 
+    /// A blank Build session, shown at once; listed once something is written in it.
+    func quickStartSession(project: String?) {
+        let s = engine.sessions.startQuick(project: project)
+        mode = .build
+        buildSelection = s.id
+    }
+
     func workKey(_ about: String?) -> String? { engine.sessions.workKey(about) }
 
     func mainSession(forWork key: String) -> WorkSession? { engine.sessions.mainSession(forWork: key) }

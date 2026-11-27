@@ -26,9 +26,9 @@ into the KB goes into that project's own folders.
 | Email | Run the `mindmill:email` skill: it proposes reminders for new mail that needs the user, and skips the rest. |
 | Reminders | `kb reminder list`: open ones that are overdue or due today go into **Today**; count the proposed ones. |
 | Goals | `kb goal list`: the user's active personal goals and their open suggestions. |
-| Teams, light | Only threads that ask the user for a decision or an answer today. At most 3. |
+| Chat, light (the user's chat tool, `kb tools`) | Only threads that ask the user for a decision or an answer today. At most 3. |
 
-Never write to the tracker, Teams or email in this routine.
+Never write to the tracker, chat or email in this routine.
 
 ## 2. Act
 

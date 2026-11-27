@@ -15,6 +15,8 @@ struct ChoiceHandler {
 struct MarkdownDocument: View {
     let text: String
     var choices: ChoiceHandler?
+    /// The options the user already picked from its choices, shown marked instead of as buttons.
+    var answered: Set<String>?
     @Environment(\.findHighlight) private var highlight
 
     var body: some View {
@@ -61,7 +63,7 @@ struct MarkdownDocument: View {
         case .rule:
             Divider().padding(.vertical, 4)
         case .choices(let multi, let options):
-            ChoicesView(multi: multi, options: options, handler: choices)
+            ChoicesView(multi: multi, options: options, handler: choices, answered: answered)
         case .strategies(let options):
             StrategyPicker(options: options, handler: choices)
         case .capture(let urls):
@@ -105,9 +107,33 @@ struct ChoicesView: View {
     let multi: Bool
     let options: [String]
     let handler: ChoiceHandler?
+    var answered: Set<String>?
 
     var body: some View {
-        if let handler {
+        if let answered, handler == nil {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(options, id: \.self) { option in
+                    let label = ChoiceAnswer.label(option)
+                    let picked = answered.contains(label)
+                    HStack(spacing: 8) {
+                        Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(picked ? Color.accentColor : Color.secondary.opacity(0.5))
+                        Text(MarkdownDocument.inline(label)).multilineTextAlignment(.leading)
+                            .foregroundStyle(picked ? .primary : .secondary)
+                            .fontWeight(picked ? .medium : .regular)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: 520, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(picked ? Color.accentColor.opacity(0.12) : Color.clear))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(picked ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.15)))
+                    .opacity(picked ? 1 : 0.7)
+                    .accessibilityLabel(picked ? "\(label), picked" : label)
+                }
+            }
+            .padding(.top, 2)
+        } else if let handler {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(options, id: \.self) { option in
                     let recommended = option.localizedCaseInsensitiveContains("(recommended)")

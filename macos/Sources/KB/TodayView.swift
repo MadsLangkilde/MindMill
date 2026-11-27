@@ -538,11 +538,15 @@ struct ChatTranscript: View {
                     if chat.items.isEmpty, let emptyHint {
                         Text(emptyHint).font(.callout).foregroundStyle(.secondary).padding(.top, 8)
                     }
-                    let marks = TranscriptTimes.marks(chat.items.map(\.timeEntry))
-                    ForEach(Array(chat.items.enumerated()), id: \.element.id) { i, item in
+                    let answered = ChoiceAnswer.answered(chat.items.map { item in
+                        (item.id, item.role == .user ? .user : item.role == .assistant ? .reply : .other, item.text)
+                    })
+                    let items = chat.items.filter { !answered.answers.contains($0.id) || !$0.attachments.isEmpty }
+                    let marks = TranscriptTimes.marks(items.map(\.timeEntry))
+                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                         VStack(alignment: .leading, spacing: 4) {
                             if let day = marks[i].day { DayHeading(title: day).padding(.vertical, 2) }
-                            ChatBubble(item: item, choose: chooser(for: item)).id(item.id)
+                            ChatBubble(item: item, choose: chooser(for: item), picks: answered.picks[item.id]).id(item.id)
                             if let time = marks[i].time, let at = item.at {
                                 MessageTime(text: time, at: at)
                                     .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
@@ -592,6 +596,7 @@ extension ClaudeChat.Item {
 struct ChatBubble: View {
     let item: ClaudeChat.Item
     var choose: ((String) -> Void)?
+    var picks: Set<String>?
 
     var body: some View {
         switch item.role {
@@ -605,7 +610,7 @@ struct ChatBubble: View {
             if MarkdownBlocks.parse(item.text).contains(where: { if case .choices = $0 { return true } else { return false } }) {
                 MarkdownDocument(text: item.text, choices: choose.map { pick in
                     ChoiceHandler(multi: false, picked: [], toggle: { _ in }, choose: pick)
-                })
+                }, answered: picks)
             } else if item.text.contains("```") || item.text.contains("\n|") {
                 MarkdownDocument(text: item.text)
             } else {

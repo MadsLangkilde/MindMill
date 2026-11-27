@@ -185,7 +185,12 @@ final class AppModel {
         }
     }
     /// Build mode's detail: nil is the overview, otherwise a session id.
-    var buildSelection: String?
+    var buildSelection: String? {
+        didSet {
+            // A Quick Start session left before anything was written in it goes away.
+            if oldValue != buildSelection, let old = engine.sessions.session(oldValue) { engine.sessions.discardIfEmpty(old) }
+        }
+    }
     var factoryEditor: FactoryEditRequest?
     var workItemDetails: [Int: WorkItemDetail] = [:]
     var claudeFind = ClaudeFind()
@@ -284,6 +289,11 @@ final class AppModel {
     var prDetails: [Int: PullRequest] = [:]
     var prDetailLoading: Set<Int> = []
     var prBusy: Set<Int> = []
+    /// Under Test, per scope: the session whose version is built and delivered; none for this Mac's own version.
+    var testBuildFrom: [String: String] = [:]
+    /// Pull requests completed (or set to complete by themselves) here, so their Complete asks go away at once,
+    /// before the pull request list catches up.
+    var prsCompletedHere: Set<Int> = []
     var completePRRequest: CompletePRRequest?
     /// Ready PRs the user said "Not Now" to in a session, until KB restarts.
     var completeAsksDeclined: Set<Int> = []
