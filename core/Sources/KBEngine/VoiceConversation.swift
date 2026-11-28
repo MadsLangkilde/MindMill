@@ -15,6 +15,22 @@ public enum VoiceOutput: Equatable {
     case clear
     /// `message`: why, and what to do, for the screen.
     case fallback(reason: VoiceFailure, speech: String, message: String)
+    /// Live voice for a new session started it, with the first thing the user asked.
+    case sessionStarted(String)
+}
+
+/// The session live voice starts when the user first asks for something (`voice.start` with `newSession`).
+public struct NewSessionPlan: Equatable, Sendable {
+    public var space: SessionSpace
+    public var project: String?
+    /// Plan's assistant, which can do what the app can.
+    public var assistant: Bool
+
+    public init(space: SessionSpace, project: String?, assistant: Bool) {
+        self.space = space
+        self.project = project
+        self.assistant = assistant && space == .plan
+    }
 }
 
 public enum VoiceState: String, Equatable {
@@ -53,6 +69,8 @@ public final class VoiceConversation: Identifiable {
     @ObservationIgnored public var owner: ObjectIdentifier?
     /// Live voice in this work session: the realtime model talks, the session does the work.
     @ObservationIgnored public var sessionID: String?
+    /// The session to start once the user asks for something, until it exists.
+    @ObservationIgnored public var newSession: NewSessionPlan?
     @ObservationIgnored public var sessionFollower = SessionVoiceFollower()
 
     public init(scope: String?) {

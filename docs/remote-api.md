@@ -426,7 +426,7 @@ The phone never stores an API key and never gets one back: it can send one the u
 | Method | Params | Result |
 |---|---|---|
 | `voice.config` | | `engine` (`keyless`/`api`), `provider?`, `providerName?`, `model?`, `rate` (speech speed, 0.5–2), `voice?` (a voice name hint), `confirmsRisky`, `language` (`auto`/`da-DK`/`en-US`) |
-| `voice.start` | `scope?`, `engine?` (`keyless` forces keyless), `session?` | `conversation`, `engine`, `session?`. With `session`: live voice in that work session through the voice API (only when `voice.config` says `api`; otherwise it fails with `unavailable` and the phone talks live on its own). The voice model hands what the user says to the session and says its progress and answer as they come; the session's messages arrive as usual with `session.changed`. Stream audio and play it as for the API engine; on `voice.fallback`, end it and carry on with on-phone live chat |
+| `voice.start` | `scope?`, `engine?` (`keyless` forces keyless), `session?`, `newSession?` (`{space: plan/build, assistant?}`) | `conversation`, `engine`, `session?`, `newSession?`. With `newSession` (and no `session`): live voice for a new session, as with `session` except that it has none yet; the first thing the user asks starts it (in `scope`), and the `voice.session` event names it. The result has `newSession: true` (an older Mac leaves it out and starts an ordinary conversation: end it and use on-phone live chat). With `session`: live voice in that work session through the voice API (only when `voice.config` says `api`; otherwise it fails with `unavailable` and the phone talks live on its own). The voice model hands what the user says to the session and says its progress and answer as they come; the session's messages arrive as usual with `session.changed`. Stream audio and play it as for the API engine; on `voice.fallback`, end it and carry on with on-phone live chat |
 | `voice.say` | `conversation`, `text` | `turn` |
 | `voice.interrupt` | `conversation` | `stopped`: the user started talking; the Mac stops the turn and the phone stops speaking |
 | `voice.end` | `conversation` | `ended` |
@@ -445,6 +445,7 @@ The phone never stores an API key and never gets one back: it can send one the u
 | `voice.transcript` | `conversation, role (user/assistant), text, final` | API engine: show the text. `text` is everything so far in that turn (a non-final one replaces the last), and the user's turn ends with a final one |
 | `voice.state` | `conversation, state (listening/thinking/speaking)` | API engine: show the state |
 | `voice.clear` | `conversation` | API engine: the user barged in; drop queued audio now |
+| `voice.session` | `conversation, session` | Live voice for a new session started it with the user's first request: show that session, with this conversation going on in it |
 | `voice.fallback` | `conversation, reason (badKey/quota/network/keyLocked/other), speech, message?` | Speak `speech`, then carry on keyless in the same conversation; show `message` (why, and what to do). `keyLocked`: the Mac is waiting for its user to allow reading the key (macOS asks for the login password once, when Mindmill moves a key it kept in the Keychain); sending the key again with `voice.key.set` also fixes it. `message` quotes the provider's own words when it gave any |
 
 ### Testing and deliveries

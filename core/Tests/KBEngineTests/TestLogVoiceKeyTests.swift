@@ -84,6 +84,25 @@ import Testing
         #expect(await engine.readVoiceKey("gemini", wait: 1) == .key("k"))
     }
 
+    @Test func liveVoiceForANewSessionStartsItWithTheFirstRequest() async throws {
+        let engine = try makeEngine()
+        let c = VoiceConversation(scope: "alpha")
+        c.newSession = NewSessionPlan(space: .build, project: "alpha", assistant: true)
+        #expect(c.newSession?.assistant == false, "only Plan has the assistant")
+        var started: [String] = []
+        c.listen { if case .sessionStarted(let id) = $0 { started.append(id) } }
+        #expect(await engine.runSessionVoiceTool(SessionVoice.stop, [:], conversation: c) == SessionVoice.idleResult)
+        let before = engine.sessions.list.count
+        #expect(await engine.runSessionVoiceTool(SessionVoice.send, ["message": "Fix the login bug"], conversation: c) == SessionVoice.sentResult)
+        let id = try #require(c.sessionID)
+        #expect(started == [id] && c.newSession == nil && engine.sessions.list.count == before + 1)
+        #expect(engine.sessions.session(id)?.project == "alpha")
+        _ = await engine.runSessionVoiceTool(SessionVoice.send, ["message": "And add a test"], conversation: c)
+        #expect(engine.sessions.list.count == before + 1 && started == [id])
+        let event = VoiceOutput.sessionStarted(id).remoteEvent(conversation: c.id)
+        #expect(event?.0 == "voice.session" && event?.1["session"]?.string == id)
+    }
+
     @Test func aFallbackSaysWhyOnTheScreen() {
         let out = VoiceOutput.fallback(reason: .keyLocked, speech: "s",
                                        message: VoiceEngineChoice.fallbackMessage(.keyLocked, provider: "Google Gemini Live"))

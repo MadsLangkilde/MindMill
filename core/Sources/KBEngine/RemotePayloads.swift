@@ -64,6 +64,8 @@ extension VoiceOutput {
             return ("voice.clear", ["conversation": c])
         case .fallback(let reason, let speech, let message):
             return ("voice.fallback", ["conversation": c, "reason": .string(reason.rawValue), "speech": .string(speech), "message": .string(message)])
+        case .sessionStarted(let id):
+            return ("voice.session", ["conversation": c, "session": .string(id)])
         case .userSaid:
             return nil
         }

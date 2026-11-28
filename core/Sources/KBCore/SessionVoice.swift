@@ -20,9 +20,12 @@ public enum SessionVoice {
         ],
     ]
 
-    public static func instructions(session: String, project: String?) -> String {
-        """
-        You are the voice of the user's Mindmill work session "\(session)"\(project.map { " in the project \($0)" } ?? ""). \
+    /// `session` nil: a new session, which the first `send_to_session` starts.
+    public static func instructions(session: String?, project: String?) -> String {
+        let which = session.map { "the user's Mindmill work session \"\($0)\"" }
+            ?? "a new Mindmill work session, which starts with the first thing you hand to it"
+        return """
+        You are the voice of \(which)\(project.map { " in the project \($0)" } ?? ""). \
         The user talks to you out loud while they're away from the screen. A capable assistant in that session does the \
         actual work: give it everything the user asks or tells about the work with send_to_session, and don't answer \
         such things yourself. While it works you get messages starting with [Progress]: say each in one short, plain \
