@@ -432,7 +432,7 @@ The phone never stores an API key and never gets one back: it can send one the u
 | `voice.end` | `conversation` | `ended` |
 | `voice.test` | `provider?` (default: the one in use) | `ok` (boolean), `message` (for the user), `providerName?`: checks the voice API key the Mac holds |
 | `voice.providers` | | `providers[]{id, name, available (works end to end; the others are listed for later), hasKey, keyPage (where to get a key), models[], model, voices[], voice}`, `active?` (the provider in use), `engine` (`keyless`/`api`, as `voice.config`) |
-| `voice.key.set` | `provider`, `key`, `use?` (default true) | `saved`, `ok`, `message` (the key checked as `voice.test` does). The Mac keeps it in its Keychain; the phone forgets it once sent. With `use` (and an `available` provider), voice goes through that provider from now on |
+| `voice.key.set` | `provider`, `key`, `use?` (default true) | `saved`, `ok`, `message` (the key checked as `voice.test` does). The Mac keeps it on the Mac only; the phone forgets it once sent. With `use` (and an `available` provider), voice goes through that provider from now on |
 | `voice.key.remove` | `provider` | `removed`; when it was in use, voice goes back to keyless |
 | `voice.use` | `provider?` (absent or empty: keyless), `model?`, `voice?` | as `voice.config`. A provider the Mac holds no key for, or one not `available`, fails with `bad_params` |
 
@@ -445,7 +445,7 @@ The phone never stores an API key and never gets one back: it can send one the u
 | `voice.transcript` | `conversation, role (user/assistant), text, final` | API engine: show the text. `text` is everything so far in that turn (a non-final one replaces the last), and the user's turn ends with a final one |
 | `voice.state` | `conversation, state (listening/thinking/speaking)` | API engine: show the state |
 | `voice.clear` | `conversation` | API engine: the user barged in; drop queued audio now |
-| `voice.fallback` | `conversation, reason (badKey/quota/network/keyLocked/other), speech, message?` | Speak `speech`, then carry on keyless in the same conversation; show `message` (why, and what to do). `keyLocked`: the Mac is waiting for its user to allow reading the key (macOS asks for the login password after Mindmill is updated); sending the key again with `voice.key.set` also fixes it |
+| `voice.fallback` | `conversation, reason (badKey/quota/network/keyLocked/other), speech, message?` | Speak `speech`, then carry on keyless in the same conversation; show `message` (why, and what to do). `keyLocked`: the Mac is waiting for its user to allow reading the key (macOS asks for the login password once, when Mindmill moves a key it kept in the Keychain); sending the key again with `voice.key.set` also fixes it. `message` quotes the provider's own words when it gave any |
 
 ### Testing and deliveries
 

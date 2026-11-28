@@ -65,6 +65,21 @@ struct RealtimeWireTests {
         #expect(schema == ["type": "object"])
     }
 
+    @Test func aGeminiToolThatTakesNothingHasNoParameters() {
+        let s = GeminiLiveWire().setup(model: "m", instructions: "", voice: "Kore", tools: SessionVoice.tools)[0]
+        let declarations = s["setup"]?["tools"]?.array?.first?["functionDeclarations"]?.array ?? []
+        let stop = declarations.first { $0["name"]?.string == SessionVoice.stop }
+        let send = declarations.first { $0["name"]?.string == SessionVoice.send }
+        #expect(stop != nil && stop?["parameters"] == nil)
+        #expect(send?["parameters"]?["properties"]?["message"] != nil)
+    }
+
+    @Test func aFallbackQuotesWhatTheProviderSaid() {
+        let m = VoiceEngineChoice.fallbackMessage(.other, provider: "Google Gemini Live", detail: "Invalid argument")
+        #expect(m == "Google Gemini Live stopped working. It said: “Invalid argument”")
+        #expect(!VoiceEngineChoice.fallbackMessage(.keyLocked, provider: "G", detail: "x").contains("It said"))
+    }
+
     @Test func everyAvailableProviderHasAWire() {
         for p in RealtimeProvider.all where p.available {
             #expect(RealtimeWires.wire(for: p.id) != nil, "\(p.id)")

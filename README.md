@@ -464,10 +464,9 @@ in a session's prompt dictates into it instead.
   the thinking in one persistent session per conversation. Enhanced and Premium voices sound best; Settings → Voice
   links to where macOS downloads them.
 - **Voice API** (optional): add a key for OpenAI Realtime, Gemini Live or xAI Grok Voice in Settings → Voice, or
-  send one from a paired phone. Keys stay in this Mac's Keychain and never go back to the phone; the phone's audio
-  goes through the Mac. If the API fails, voice falls back to built-in and says why. After Mindmill is updated,
-  macOS asks once for your login password before it reads a key; Mindmill asks for it at launch, and a phone that
-  needs the key meanwhile hears that it's waiting.
+  send one from a paired phone. Keys stay on this Mac, in a file only your user can read (not the Keychain, so a
+  new build never asks for your password), and never go back to the phone; the phone's audio goes through the Mac.
+  If the API fails, voice falls back to built-in and says why, in the provider's words.
 
 **The phone apps** (Mindmill for Android and iOS, separate projects) connect to this Mac over the local network or Tailscale once paired in Settings →
 Remote. It has the backlog, facts, follow-ups, meetings (with the phone listening to the room and sharing its

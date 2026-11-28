@@ -215,9 +215,9 @@ extension MindmillEngine {
                                       return await self.askVoiceBrain(request, in: c)
                                   },
                                   audioOut: audioOut,
-                                  onFail: { [weak self, weak c] reason in
+                                  onFail: { [weak self, weak c] reason, detail in
                                       guard let self, let c else { return }
-                                      self.voiceFallBack(c, reason)
+                                      self.voiceFallBack(c, reason, detail: detail)
                                   })
         realtimeRelays[c.id] = relay
         let title = index.projects.first { $0.id == c.scope }?.title
@@ -254,9 +254,9 @@ extension MindmillEngine {
         let relay = RealtimeRelay(wire: wire, conversation: c, layer: actions,
                                   askBrain: { _ in "Use send_to_session." },
                                   audioOut: audioOut,
-                                  onFail: { [weak self, weak c] reason in
+                                  onFail: { [weak self, weak c] reason, detail in
                                       guard let self, let c else { return }
-                                      self.voiceFallBack(c, reason)
+                                      self.voiceFallBack(c, reason, detail: detail)
                                   },
                                   tools: tools)
         realtimeRelays[c.id] = relay
@@ -294,14 +294,14 @@ extension MindmillEngine {
         }
     }
 
-    private func voiceFallBack(_ c: VoiceConversation, _ reason: VoiceFailure) {
+    private func voiceFallBack(_ c: VoiceConversation, _ reason: VoiceFailure, detail: String? = nil) {
         realtimeRelays[c.id]?.close()
         realtimeRelays[c.id] = nil
         c.apiFailed = true
         c.engine = .keyless
         let provider = RealtimeProvider.with(id: VoicePreferences.load().provider)?.name
         c.emit(.fallback(reason: reason, speech: VoiceEngineChoice.fallbackSpeech(reason),
-                         message: VoiceEngineChoice.fallbackMessage(reason, provider: provider, machine: platform.machineWord)))
+                         message: VoiceEngineChoice.fallbackMessage(reason, provider: provider, machine: platform.machineWord, detail: detail)))
     }
 
     /// The realtime model's `ask_brain`: one turn of the conversation's Claude session, answered in text.

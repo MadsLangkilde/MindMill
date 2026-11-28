@@ -614,7 +614,7 @@ private struct VoiceStep: View {
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             DisclosureGroup("Add an API key for smoother voice (optional)", isExpanded: $addKey) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("A real-time voice API answers faster and sounds more natural. The key stays in this Mac's Keychain; your phone talks through the Mac. If the key stops working, Mindmill switches back to the built-in voice by itself.")
+                    Text("A real-time voice API answers faster and sounds more natural. The key stays on this Mac, readable only by your user; your phone talks through the Mac. If the key stops working, Mindmill switches back to the built-in voice by itself.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Picker("Provider", selection: $provider) {
                         ForEach(RealtimeProvider.all.filter(\.available)) { Text($0.name).tag($0.id) }
@@ -636,7 +636,7 @@ private struct VoiceStep: View {
 
     private func save() {
         let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        VoiceKeychain().set(k, provider: provider)
+        MacVoiceKeys().set(k, provider: provider)
         var prefs = VoicePreferences.load()
         prefs.provider = provider
         prefs.engine = .api

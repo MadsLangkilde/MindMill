@@ -5,8 +5,8 @@ import KBEngine
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Pushes to iPhones through Apple's push service (APNs), with a token-based key (.p8) that stays on this Mac in the
-/// Keychain. The phone only ever sends its device token (`push.register`).
+/// Pushes to iPhones through Apple's push service (APNs), with a token-based key (.p8) that stays on this Mac
+/// (`MacSecrets`). The phone only ever sends its device token (`push.register`).
 @MainActor
 final class APNsPusher {
     static let keySecret = "push/apns"
@@ -17,7 +17,7 @@ final class APNsPusher {
     private var jwt: (token: String, made: Date)?
     private(set) var lastError: String?
 
-    init(secrets: SecretStore = KeychainSecretStore.shared) { self.secrets = secrets }
+    init(secrets: SecretStore = MacSecrets.shared) { self.secrets = secrets }
 
     var keyID: String { UserDefaults.standard.string(forKey: Self.keyIDKey) ?? "" }
     var teamID: String { UserDefaults.standard.string(forKey: Self.teamIDKey) ?? "" }
@@ -95,9 +95,9 @@ struct PushSettingsView: View {
             .font(.callout).foregroundStyle(.secondary)
         LabeledContent("Key (.p8)") {
             HStack {
-                Text(pusher.isSetUp ? "Saved" : (KeychainSecretStore.shared.hasSecret(APNsPusher.keySecret) ? "Saved" : "None"))
+                Text(pusher.isSetUp ? "Saved" : (MacSecrets.shared.hasSecret(APNsPusher.keySecret) ? "Saved" : "None"))
                 Button("Choose…") { importing = true }
-                if KeychainSecretStore.shared.hasSecret(APNsPusher.keySecret) { Button("Remove") { pusher.removeKey(); tick += 1 } }
+                if MacSecrets.shared.hasSecret(APNsPusher.keySecret) { Button("Remove") { pusher.removeKey(); tick += 1 } }
             }
         }
         TextField("Key ID", text: $keyID)
@@ -111,7 +111,7 @@ struct PushSettingsView: View {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 let pem = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-                message = pusher.setKey(pem: pem) ? "Key saved in the Keychain." : "That isn't an APNs key (.p8)."
+                message = pusher.setKey(pem: pem) ? "Key saved on this Mac." : "That isn't an APNs key (.p8)."
                 if keyID.isEmpty, let id = url.deletingPathExtension().lastPathComponent.split(separator: "_").last { keyID = String(id) }
                 tick += 1
             }

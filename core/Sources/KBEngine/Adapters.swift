@@ -38,6 +38,94 @@ public final class MemorySecretStore: SecretStore, @unchecked Sendable {
     public func hasSecret(_ name: String) -> Bool { secret(name) != nil }
 }
 
+/// Secrets in one JSON file only the user can read (0600, in a 0700 folder). The Mac keeps them here, not in the
+/// login Keychain: macOS asks for the password before each new build of an ad-hoc signed app may read a Keychain
+/// item, and Mindmill is rebuilt often. `legacy` is where earlier builds kept them: a secret only there moves here
+/// the first time it's read, and from then on only this file counts for it (removing it doesn't bring the old copy
+/// back).
+public final class FileSecretStore: SecretStore, @unchecked Sendable {
+    public let url: URL
+    private let legacy: SecretStore?
+    private let lock = NSLock()
+    private var cache: Contents?
+
+    struct Contents: Codable {
+        var secrets: [String: String] = [:]
+        /// Names set, removed or moved here: their legacy copy is no longer read.
+        var settled: [String] = []
+    }
+
+    public init(url: URL, legacy: SecretStore? = nil) {
+        self.url = url
+        self.legacy = legacy
+    }
+
+    public func secret(_ name: String) -> String? {
+        if let v = lock.withLock({ contents.secrets[name] }) { return v }
+        guard let legacy, !isSettled(name), legacy.hasSecret(name), let v = legacy.secret(name), !v.isEmpty else { return nil }
+        lock.withLock {
+            if contents.secrets[name] == nil, !contents.settled.contains(name) {
+                contents.secrets[name] = v
+                contents.settled.append(name)
+                save()
+            }
+        }
+        return lock.withLock { contents.secrets[name] }
+    }
+
+    public func setSecret(_ value: String?, name: String) {
+        lock.withLock {
+            if let value, !value.isEmpty { contents.secrets[name] = value } else { contents.secrets[name] = nil }
+            if !contents.settled.contains(name) { contents.settled.append(name) }
+            save()
+        }
+    }
+
+    public func hasSecret(_ name: String) -> Bool {
+        if lock.withLock({ contents.secrets[name] != nil }) { return true }
+        guard let legacy, !isSettled(name) else { return false }
+        return legacy.hasSecret(name)
+    }
+
+    public func secretStamp(_ name: String) -> String? {
+        if let v = lock.withLock({ contents.secrets[name] }) { return String(v.hashValue) }
+        guard let legacy, !isSettled(name) else { return nil }
+        return legacy.secretStamp(name)
+    }
+
+    private func isSettled(_ name: String) -> Bool { lock.withLock { contents.settled.contains(name) } }
+
+    /// Call with the lock held.
+    private var contents: Contents {
+        get {
+            if let cache { return cache }
+            let loaded = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Contents.self, from: $0) } ?? Contents()
+            cache = loaded
+            return loaded
+        }
+        set { cache = newValue }
+    }
+
+    /// Call with the lock held. Written to a file created 0600 and renamed over the old one, so it's never readable
+    /// by anyone else, even for a moment.
+    private func save() {
+        let fm = FileManager.default
+        let folder = url.deletingLastPathComponent()
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? e.encode(contents) else { return }
+        let temp = folder.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
+        guard fm.createFile(atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
+        do {
+            if fm.fileExists(atPath: url.path) { _ = try fm.replaceItemAt(url, withItemAt: temp) } else { try fm.moveItem(at: temp, to: url) }
+        } catch {
+            try? fm.removeItem(at: temp)
+        }
+    }
+}
+
 /// Voice API keys are secrets named `voice-api/<provider>`.
 public struct SecretVoiceKeys: VoiceKeyStore {
     public let store: SecretStore

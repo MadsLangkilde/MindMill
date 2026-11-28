@@ -214,8 +214,9 @@ func makeKB() throws -> TempDir {
         let queue = DispatchQueue(label: "test")
         let received = await withCheckedContinuation { (cont: CheckedContinuation<[String], Never>) in
             let once = OnceBox(cont)
+            // FSEvents can first report the folder's own creation, just before the watch started.
             let watcher = FileWatcher(path: dir.url.path, debounce: 0.1, callbackQueue: queue) { paths in
-                once.resume(paths)
+                if paths.contains(where: { $0.hasSuffix("/a.md") }) { once.resume(paths) }
             }
             #expect(watcher.start())
             once.keepAlive = watcher

@@ -73,7 +73,7 @@ Portable pieces with a platform branch:
 
 | Protocol | Methods | macOS | Windows |
 |---|---|---|---|
-| `SecretStore` | `secret(_:)`, `setSecret(_:name:)`, `hasSecret(_:)` | `KeychainSecretStore` (app, `MacPlatform.swift`); `<group>/<name>` → service `dk.langkilde.kb.<group>` | `CredentialSecretStore` (host): Credential Manager, target `Mindmill/<name>` |
+| `SecretStore` | `secret(_:)`, `setSecret(_:name:)`, `hasSecret(_:)`, `secretStamp(_:)` (has a default) | `MacSecrets` (app, `MacPlatform.swift`): a `FileSecretStore` (`secrets/secrets.json`, 0600), moving what `KeychainSecretStore` (`<group>/<name>` → service `dk.langkilde.kb.<group>`) held in earlier builds | `CredentialSecretStore` (host): Credential Manager, target `Mindmill/<name>` |
 | `ToolLocating` | `resolve() -> LoginShell.Resolved` | `SystemTools` (login shell) | `SystemTools` (`WindowsTools`) |
 | `CompanionTransport` | `listen(port:folder:) -> CompanionListening`, `watchNetwork(_:)`, `stopWatchingNetwork()`, `addresses()`, `machineName` | `MacCompanionTransport` (app): `NWListener` + TLS from `RemoteIdentity`, `NWPathMonitor`, Tailscale CLI | `ForwardedPhoneTransport` (host): the shell terminates TLS and forwards phones to `/phone` (engine-host.md, "Phones on Windows") |
 | `CompanionListening` | `fingerprint`, `onState`, `onConnection`, `start()`, `cancel()` | `NWCompanionListener` | host |
@@ -83,7 +83,7 @@ Portable pieces with a platform branch:
 | `Presenter` | `show(screen:id:)` | `AppModel` (navigates the window) | the shell's `desktop.show` event (`ShellServices`) |
 | `ActionEndpoint` | `mcpConfig()` | `LocalActionServer` (NWListener) | `LoopbackActionEndpoint` (host, plain sockets) |
 | `SpeechServices` | `startListening(…events:)`, `stopListening()`, `speak(_:voice:rate:done:)`, `stopSpeaking()`, `voices()` | not adopted yet: `VoiceAudio`/`MacVoiceMode` in the app still call Speech and AVFoundation directly | the shell's `platform.speech.*`, `platform.speak`, `platform.voices` |
-| `VoiceKeyStore` (KBCore) | `key(provider:)`, `set(_:provider:)` | `VoiceKeychain` = `SecretVoiceKeys(KeychainSecretStore.shared)` | `SecretVoiceKeys` over the host's `SecretStore` |
+| `VoiceKeyStore` (KBCore) | `key(provider:)`, `set(_:provider:)` | `MacVoiceKeys` = `SecretVoiceKeys(MacSecrets.shared)` | `SecretVoiceKeys` over the host's `SecretStore` |
 | `TestPlatform` | `ownKinds`, `gatherFacts(environment:)`, `deliver(_ job: TestJob)`, `snapshot(_:into:name:)` | `MacTestPlatform` (app): Xcode, `devicectl`, `simctl`, TestFlight, WebKit snapshots, the Mac's probes | none: the portable probes; iPhone kinds fail with "iPhone builds need a Mac…" plus the compatibility check's finding (`TestRunner.unsupported`), and `test.status` marks them `unavailable` |
 
 `MemorySecretStore` and the fakes in `Tests/KBEngineTests` show the smallest implementations.

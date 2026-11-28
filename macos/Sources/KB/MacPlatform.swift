@@ -9,15 +9,24 @@ import Security
 enum MacPlatform {
     /// The engine's platform on this Mac. `AppModel` adds itself as the presenter and the brain's name.
     @MainActor static func make() -> EnginePlatform {
-        EnginePlatform(name: "macOS", machineWord: "Mac", secrets: KeychainSecretStore.shared, transport: MacCompanionTransport(),
+        EnginePlatform(name: "macOS", machineWord: "Mac", secrets: MacSecrets.shared, transport: MacCompanionTransport(),
                        pluginRoot: { AppModel.currentPluginLocation.path })
     }
 }
 
 extension AppModel: Presenter {}
 
-/// Secrets in the login Keychain of this Mac only, as generic passwords: `<group>/<account>` is kept under the
-/// service `dk.langkilde.kb.<group>`, so voice keys (`voice-api/<provider>`) stay where earlier builds saved them.
+/// The Mac's secrets (voice API keys, the APNs key): a file only the user can read, so no build of this ad-hoc
+/// signed app ever has to ask for the login password. What earlier builds kept in the Keychain moves over the first
+/// time it's read.
+enum MacSecrets {
+    static let shared = FileSecretStore(url: AppPaths.data.appendingPathComponent("secrets", isDirectory: true)
+                                            .appendingPathComponent("secrets.json"),
+                                        legacy: KeychainSecretStore.shared)
+}
+
+/// Where earlier builds kept secrets: the login Keychain, as generic passwords, `<group>/<account>` under the service
+/// `dk.langkilde.kb.<group>`. Only read now, to move them to `MacSecrets`.
 final class KeychainSecretStore: SecretStore, @unchecked Sendable {
     static let shared = KeychainSecretStore()
 
@@ -77,13 +86,13 @@ final class KeychainSecretStore: SecretStore, @unchecked Sendable {
     }
 }
 
-/// Real-time voice API keys, in the login Keychain of this Mac only. They never go to the phone.
-struct VoiceKeychain: VoiceKeyStore {
-    private var keys: SecretVoiceKeys { SecretVoiceKeys(KeychainSecretStore.shared) }
+/// Real-time voice API keys, on this Mac only (`MacSecrets`). They never go to the phone.
+struct MacVoiceKeys: VoiceKeyStore {
+    private var keys: SecretVoiceKeys { SecretVoiceKeys(MacSecrets.shared) }
 
     func key(provider: String) -> String? { keys.key(provider: provider) }
 
     func set(_ key: String?, provider: String) { keys.set(key, provider: provider) }
 
-    static func has(provider: String) -> Bool { KeychainSecretStore.shared.hasSecret(SecretVoiceKeys.name(provider)) }
+    static func has(provider: String) -> Bool { MacSecrets.shared.hasSecret(SecretVoiceKeys.name(provider)) }
 }

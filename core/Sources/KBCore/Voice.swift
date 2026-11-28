@@ -135,16 +135,21 @@ public struct VoiceEngineChoice: Equatable, Sendable {
     }
 
     /// Why it fell back and what to do, for the screen.
-    public static func fallbackMessage(_ reason: VoiceFailure, provider: String?, machine: String = "Mac") -> String {
+    /// `detail`: the provider's own words, quoted after the reason.
+    public static func fallbackMessage(_ reason: VoiceFailure, provider: String?, machine: String = "Mac", detail: String? = nil) -> String {
         let name = provider ?? "The voice API"
+        let base: String
         switch reason {
-        case .badKey: return "\(name) refused the key. Check it in Settings → Voice on the \(machine), or send it again from the phone."
-        case .quota: return "\(name)'s quota or credit has run out."
-        case .network: return "The \(machine) lost its connection to \(name)."
+        case .badKey: base = "\(name) refused the key. Check it in Settings → Voice on the \(machine), or send it again from the phone."
+        case .quota: base = "\(name)'s quota or credit has run out."
+        case .network: base = "The \(machine) lost its connection to \(name)."
         case .keyLocked:
-            return "The \(machine) couldn't read the \(name) key: macOS is asking for your login password there, as it does after Mindmill is updated. Enter it on the \(machine), or send the key again from the phone."
-        case .other: return "\(name) stopped working."
+            base = "The \(machine) couldn't read the \(name) key: macOS is asking for your login password there. Enter it on the \(machine), or send the key again from the phone."
+        case .other: base = "\(name) stopped working."
         }
+        let said = (detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !said.isEmpty, reason != .keyLocked else { return base }
+        return base + " It said: “\(said.count > 240 ? String(said.prefix(239)) + "…" : said)”"
     }
 }
 

@@ -252,7 +252,7 @@ struct VoiceSettingsView: View {
                 Toggle("Stop speaking when I start talking", isOn: $prefs.bargeIn)
             }
             Section("Voice API keys") {
-                Text("Keys are stored in this Mac's Keychain and never leave it. The phone's voice goes through this Mac, and a paired phone can send a key here too.")
+                Text("Keys stay on this Mac, in a file only your user can read, and never go to the phone. The phone's voice goes through this Mac, and a paired phone can send a key here too.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 ForEach(RealtimeProvider.all.filter { $0.available || showAllProviders }) { p in
                     ProviderKeyRow(provider: p, prefs: $prefs)
@@ -268,7 +268,7 @@ struct VoiceSettingsView: View {
         }
     }
 
-    private var hasActiveKey: Bool { prefs.provider.map { VoiceKeychain.has(provider: $0) } ?? false }
+    private var hasActiveKey: Bool { prefs.provider.map { MacVoiceKeys.has(provider: $0) } ?? false }
 
     private var voices: [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
@@ -330,7 +330,7 @@ private struct ProviderKeyRow: View {
                     Text("Key saved").font(.callout).foregroundStyle(.secondary)
                     Button(testing ? "Testing…" : "Test Key") { test() }.disabled(testing)
                     Button("Remove", role: .destructive) {
-                        VoiceKeychain().set(nil, provider: provider.id)
+                        MacVoiceKeys().set(nil, provider: provider.id)
                         saved = false
                         result = nil
                         if prefs.provider == provider.id { prefs.provider = nil; prefs.engine = .keyless }
@@ -350,7 +350,7 @@ private struct ProviderKeyRow: View {
                 HStack {
                     SecureField("API key", text: $entry).textFieldStyle(.roundedBorder)
                     Button("Save") {
-                        VoiceKeychain().set(entry.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider.id)
+                        MacVoiceKeys().set(entry.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider.id)
                         entry = ""
                         saved = true
                         if provider.available, prefs.provider == nil || prefs.engine == .keyless {
@@ -370,11 +370,11 @@ private struct ProviderKeyRow: View {
             }
         }
         .padding(.vertical, 4)
-        .onAppear { saved = VoiceKeychain.has(provider: provider.id) }
+        .onAppear { saved = MacVoiceKeys.has(provider: provider.id) }
     }
 
     private func test() {
-        guard let key = VoiceKeychain().key(provider: provider.id) else { return }
+        guard let key = MacVoiceKeys().key(provider: provider.id) else { return }
         testing = true
         Task {
             result = await RealtimeKeyTest.test(provider: provider.id, key: key)

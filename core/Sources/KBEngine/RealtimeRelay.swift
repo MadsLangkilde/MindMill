@@ -35,7 +35,8 @@ public final class RealtimeRelay {
     private let layer: ActionLayer
     private let askBrain: (String) async -> String
     private let audioOut: (Audio) -> Void
-    private let onFail: (VoiceFailure) -> Void
+    /// Why it failed, and the provider's own words for it.
+    private let onFail: (VoiceFailure, String) -> Void
     private var task: URLSessionWebSocketTask?
     private var seq = 0
     private var closed = false
@@ -46,7 +47,7 @@ public final class RealtimeRelay {
     private var settings: (model: String, key: String, voice: String, instructions: String)?
 
     public init(wire: RealtimeWire, conversation: VoiceConversation, layer: ActionLayer, askBrain: @escaping (String) async -> String,
-         audioOut: @escaping (Audio) -> Void, onFail: @escaping (VoiceFailure) -> Void, tools: Tools? = nil) {
+         audioOut: @escaping (Audio) -> Void, onFail: @escaping (VoiceFailure, String) -> Void, tools: Tools? = nil) {
         self.custom = tools
         self.wire = wire
         self.conversation = conversation
@@ -207,6 +208,6 @@ public final class RealtimeRelay {
     private func failed(status: Int?, message: String) {
         guard !closed else { return }
         close()
-        onFail(VoiceFailure.classify(status: status, message: message))
+        onFail(VoiceFailure.classify(status: status, message: message), message)
     }
 }
