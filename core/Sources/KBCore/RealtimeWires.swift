@@ -152,12 +152,7 @@ public struct GeminiLiveWire: RealtimeWire {
 
     public func setup(model: String, instructions: String, voice: String, tools: [JSONValue], resume: String? = nil) -> [JSONValue] {
         let declarations = tools.map { t -> JSONValue in
-            var d: [String: JSONValue] = ["name": t["name"] ?? "", "description": t["description"] ?? ""]
-            // Gemini refuses an object without properties ("should be non-empty for OBJECT type") and closes the
-            // connection, so a tool that takes nothing goes without `parameters`.
-            let parameters = Self.openAPISchema(t["inputSchema"] ?? ["type": "object"])
-            if parameters["properties"] != nil { d["parameters"] = parameters }
-            return .object(d)
+            ["name": t["name"] ?? "", "description": t["description"] ?? "", "parameters": Self.openAPISchema(t["inputSchema"] ?? ["type": "object"])]
         }
         var resumption: JSONValue = [:]
         if let resume { resumption = ["handle": .string(resume)] }
