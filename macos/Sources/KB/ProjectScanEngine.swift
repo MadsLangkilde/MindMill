@@ -101,6 +101,7 @@ extension AppModel {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = multiple
+        panel.canCreateDirectories = true
         panel.message = message
         panel.prompt = "Choose"
         return panel.runModal() == .OK ? panel.urls : []

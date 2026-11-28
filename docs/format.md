@@ -4,6 +4,26 @@ The knowledge base is a folder of Markdown files, by default a git repo at `~/pr
 People edit it in the Mindmill app or any editor. Claude edits it with its normal file tools. Nothing is
 cached anywhere else: whatever is on disk is the truth, so a save takes effect at once.
 
+## Instances
+
+kb's config, `~/.config/kb/config.json`, names the knowledge base `kb` and the app use (`root`). Mindmill also keeps
+its instances there: each a knowledge base of its own, one open at a time.
+
+```json
+{
+  "root": "~/Mindmill/knowledgebase",
+  "instance": "main",
+  "instances": [
+    {"id": "main", "name": "Main", "root": "~/Mindmill/knowledgebase"},
+    {"id": "acme", "name": "Acme", "root": "~/Mindmill/acme"}
+  ]
+}
+```
+
+`root` is always the open instance's folder; `kb layout migrate` moving it keeps the instance (by `instance`). The
+first instance, `main`, keeps Mindmill's own data in the data folder (`~/Library/Application Support/KB` on a Mac);
+every other has `instances/<id>/` in it for its sessions, factories, crew, scans, sprints and testing.
+
 ## Layout
 
 ```
@@ -236,13 +256,14 @@ means `filed`), `start` and `end` (`HH:MM`), `attendees` (names, never email add
 `location`, `online_url` (the join link), `previous` (the last held meeting in the same series),
 `session_id` (the Claude session that ran it, so `claude --resume <id>` reopens it), `ready: true` once the
 user is done preparing (Done in the app, or picking questions; only the user sets it), and from calendar sync
-`calendar_id` (the Outlook event id), `calendar_title`, `calendar_url`, `calendar_series` and
+`calendar_id` (the calendar's event id), `calendar_title`, `calendar_url`, `calendar_series` and
 `project_guessed: true` when no rule placed it.
 
 ### Calendar
 
 `kb calendar import --from <date> --to <date>` reads `{"events": [...]}` on stdin, in the Outlook
-connector's shape or with `title`/`start`/`end`/`attendees` keys, and mirrors each event as a meeting file:
+connector's shape or with `title`/`start`/`end`/`attendees` keys (what the skill sends for Google Calendar and other
+calendars), and mirrors each event as a meeting file:
 
 - **New event:** `status: scheduled`, in the project of the latest earlier meeting with the same title
   (numbers ignored, so "Sprint 24 retro" and "Sprint 25 retro" are one series) that isn't itself a guess,
@@ -454,7 +475,9 @@ again. No secrets: credentials stay where the user keeps them (for Azure DevOps,
 ```
 
 `tracker.kind` is `azure-devops`, `local` (Mindmill's own tracker, `kb work`), `jira` (through Claude's Jira
-connector, not the CLI), `github` or `none`. `tracker.backlog_iteration` (optional) is where "Move to backlog" puts an
+connector, not the CLI), `github` or `none`. A scope
+without a tracker of its own (no `tracker`, or `none`) works in its project's Overview tracker, the wide scope's,
+when that has one: one board for the whole project, with Mindmill's own tracker in the Overview's `work.json`. `tracker.backlog_iteration` (optional) is where "Move to backlog" puts an
 Azure DevOps item; without it, `iteration_root`, else the project's root iteration.
 
 The Mindmill app remembers the last current sprint it saw per tracker, and the sprint reviews it offered, in

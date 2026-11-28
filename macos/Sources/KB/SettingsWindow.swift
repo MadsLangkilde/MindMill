@@ -155,6 +155,7 @@ struct GeneralSettingsView: View {
                 }
                 .onChange(of: calendarMinutes) { _, _ in model.scheduleSyncTimer() }
             }
+            Section("In the Background") { BackgroundSettings() }
             Section("Finding things") {
                 Text("⌘F searches where you are: Plan's search field (type words, or describe what you remember and press Ask \(Brain.name) to find it), the conversation of the session in front in Build, or the session list.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

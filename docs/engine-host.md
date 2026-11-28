@@ -196,7 +196,8 @@ code, a phone or the listener changes.
 ## What runs in the engine on Windows today
 
 Answered by the engine: `hello`/`state`, `entries.*`, `entry.get/save/new`, `inbox.*`, `facts.proposed`,
-`app.structure`, `kb.run`, `projects.config.get/save`, `folders.list`, `actions.*`, the `voice.*` methods (keyless
+`app.structure`, `kb.run`, `projects.config.get/save`, `folders.list/create`, `instances.list`, `instance.create`,
+`actions.*`, the `voice.*` methods (keyless
 and API, with Claude Code installed), the desktop methods above, and Build:
 
 - **Sessions**: `sessions.list`, `session.get/send/new/archive`, `assistant.open`, `session.changed` events, and the
@@ -222,11 +223,24 @@ proposed, approve, decline, propose, links, `fact.link`, `fact.links.suggest`, `
 (list, create, update, merge, duplicates, check), discussions, ideas, research and references (their Claude work runs
 as Plan sessions), meetings (list, create, `calendar.upcoming`; `meeting.prepare` starts a Plan session with the
 kb:prep skill), reminders and goals (with the goal coach), the day's plan (`today.*`; the morning routine, the calendar
-sync and the email scan run headless Claude Code with the Microsoft 365 connector), `sync.*`, backlog proposals
+sync and the email scan run headless Claude Code with the user's connectors; the calendar sync reads the calendar in
+`engine.calendarSource`, saved in the platform's defaults, and does nothing while it is none. With no choice saved the
+engine settles it once from `claude mcp list` (Microsoft 365 when listed, else none); a host that lists connectors
+itself can pass them to `adoptCalendarSource(from:)`), `sync.*`, backlog proposals
 (`backlog.*` with the duplicate check), `workitem.tags.align`, sprints (`sprint.*`, `work.startable`), `people.*`,
 `repos.pull`, projects, `app.show`, `app.mode` and the `settings.*` actions. Still only on the Mac: meetings with
 transcription (`meeting.*` methods answer `unavailable`, `meeting.mac.*` actions fail with "… isn't available on
 Windows yet.").
+
+### Instances
+
+`instance.switch` needs the host: the engine calls `onSwitchInstance` with the instance and the host restarts on it
+(the Mac quits and opens again, so every store reads that instance's data from the start). Without a handler the
+phone gets `unavailable`. A host that starts on an instance sets `engine.instance`, and, before anything loads,
+`AppPaths.instanceFolder` to `instance.dataFolder(in: AppPaths.data)` for any instance but `main`: sessions,
+factories, the crew, scans, sprints and testing then live there, while the remote identity and paired phones stay
+in the data folder. `hello` sends `launcherPort` when the host has a launcher that can start it for a phone; the
+Windows shell has none yet, so it stays nil.
 
 ## Realtime voice
 

@@ -143,31 +143,84 @@ public enum Brain {
     static func forget() { cached = nil }
 }
 
-/// When the first-run setup shows: until an AI assistant is installed, and on a first launch with no knowledge base.
+/// When the first-run setup shows: until an AI assistant is installed, and whenever the folder Mindmill is set to holds
+/// no knowledge base, as on a first launch or after a project's folder was picked for it.
 public enum OnboardingGate {
     public static let completedKey = "onboardingCompleted"
 
     public enum Step: Int, CaseIterable, Sendable {
-        case assistant, knowledgeBase, voice, tools
+        case assistant, knowledgeBase, voice, background, tools
 
         public var title: String {
             switch self {
             case .assistant: return "Your AI"
             case .knowledgeBase: return "Knowledge Base"
             case .voice: return "Voice"
+            case .background: return "In the Background"
             case .tools: return "Your Tools"
             }
         }
     }
 
     /// `aiFound` is nil while KB is still looking for it; that alone never shows the setup.
-    public static func needed(completed: Bool, aiFound: Bool?, hasKnowledgeBase: Bool, forced: Bool) -> Bool {
-        forced || aiFound == false || (!completed && !hasKnowledgeBase)
+    public static func needed(aiFound: Bool?, hasKnowledgeBase: Bool, forced: Bool) -> Bool {
+        forced || aiFound == false || !hasKnowledgeBase
+    }
+
+    /// The knowledge base step is done once the knowledge base has a project to work on.
+    public static func knowledgeBaseReady(hasKnowledgeBase: Bool, projects: Int) -> Bool {
+        hasKnowledgeBase && projects > 0
     }
 
     /// The step to open on: the first one that isn't ready.
     public static func firstStep(assistantReady: Bool, hasKnowledgeBase: Bool) -> Step {
         !assistantReady ? .assistant : !hasKnowledgeBase ? .knowledgeBase : .tools
+    }
+}
+
+/// A folder offered as the knowledge base: Mindmill's own folder for all of the user's projects, never a project's.
+public enum KnowledgeBaseFolder: Equatable, Sendable {
+    /// Doesn't exist yet; Mindmill makes it.
+    case new
+    case empty
+    case knowledgeBase
+    /// Holds other things; what it looks like, for the message.
+    case inUse(String)
+
+    public static let suggestedPath = "~/Mindmill/knowledgebase"
+
+    static let ignored: Set<String> = [".DS_Store", ".localized", "Icon\r"]
+    static let codeMarkers = ["package.json", "Package.swift", "build.gradle", "build.gradle.kts", "pom.xml", "Cargo.toml",
+                              "go.mod", "pyproject.toml", "setup.py", "Gemfile", "composer.json", "Makefile", "CMakeLists.txt",
+                              "src", "Sources"]
+
+    public static func check(_ url: URL, fileManager fm: FileManager = .default) -> KnowledgeBaseFolder {
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return .new }
+        guard isDir.boolValue else { return .inUse("a file") }
+        if fm.fileExists(atPath: KBLayout.home(root: url).appendingPathComponent("kb.json").path) { return .knowledgeBase }
+        let names = ((try? fm.contentsOfDirectory(atPath: url.path)) ?? []).filter { !ignored.contains($0) }
+        if names.isEmpty { return .empty }
+        if names.contains(".git") { return .inUse("a Git repository") }
+        if names.contains(where: { n in codeMarkers.contains(n) || n.hasSuffix(".xcodeproj") || n.hasSuffix(".sln") || n.hasSuffix(".csproj") }) {
+            return .inUse("a code project")
+        }
+        return .inUse("a folder with other files in it")
+    }
+
+    public var usable: Bool {
+        if case .inUse = self { return false }
+        return true
+    }
+
+    public var message: String {
+        switch self {
+        case .new: return "New folder. Mindmill makes it and starts your knowledge base there."
+        case .empty: return "Empty folder. Mindmill starts your knowledge base here."
+        case .knowledgeBase: return "An existing Mindmill knowledge base. Mindmill opens it."
+        case .inUse(let what):
+            return "This is \(what), not an empty folder. The knowledge base is Mindmill's own folder for all your projects, so pick an empty or new one (such as \(Self.suggestedPath)) and add your projects below."
+        }
     }
 }
 
@@ -202,8 +255,9 @@ public enum SourceSetup {
     }
 
     /// The first message of the setup session. `tracker` is nil to leave it as each scope has it, `tools` are
-    /// `ClaudeConnectors.catalog` ids besides the tracker, and `connected` is what `claude mcp list` showed.
-    public static func brief(tracker: String?, tools: [String], scopes: [Scope],
+    /// `ClaudeConnectors.catalog` ids besides the tracker, `calendar` is the calendar the user picked, and `connected`
+    /// is what `claude mcp list` showed.
+    public static func brief(tracker: String?, tools: [String], calendar: CalendarSource = .none, scopes: [Scope],
                              connected: [ClaudeConnectors.Server]) -> String {
         var out = ["Help me set up the tools Mindmill works with. You are the middle man: check what is connected, walk me through connecting what is missing, and write Mindmill's settings. Ask one thing at a time, with choices where you can. Change nothing besides Mindmill's settings and Claude's connectors."]
 
@@ -235,6 +289,21 @@ public enum SourceSetup {
                 - Save with `kb settings set tracker '{"kind": "\(tracker)", "organization": …, "project": …}' --scope <id>`.
                 """
             }
+            out.append(steps)
+        }
+
+        if calendar.isSet {
+            let state = calendar.server(in: connected)?.status
+            var steps = "## Calendar: \(calendar.title)\n\nMindmill mirrors its meetings as meeting files. \(calendar.brief)\n"
+            switch state {
+            case .connected?:
+                steps += "- It is connected: check it answers by listing today's events, one only."
+            case .some:
+                steps += "- It needs signing in again: send me to claude.ai → Settings → Connectors (https://claude.ai/settings/connectors) for a claude.ai connector, else to Mindmill's Settings → Connections → Sign In, wait until I say it's done, and check again."
+            case nil:
+                steps += "- It isn't connected. Tell me to add it at claude.ai → Settings → Connectors (https://claude.ai/settings/connectors), wait until I say it's done, and check again with `claude mcp list`."
+            }
+            steps += "\n- When it answers, run `kb sync calendar` and tell me what it said. If I'd rather not connect it, tell me I can choose No calendar in Mindmill's Settings → Connections."
             out.append(steps)
         }
 

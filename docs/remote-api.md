@@ -47,6 +47,27 @@ pair again). Renaming it on the Mac changes nothing for the phone.
 The Mac restarts its listener by itself when it fails (port in use, no network) and when the network changes, so a
 connection can drop; reconnect with `hello` and a short backoff (1 s, 2 s, 5 s, then every 10 s) while the app is open.
 
+## Starting Mindmill from the phone
+
+When the user allows it on the Mac (Settings → General → In the Background, or the last onboarding step), a small
+launcher on the Mac starts Mindmill when a paired phone asks, even after Mindmill was quit. It runs only while the
+Mac is awake and the user is logged in. `hello` says whether it is on: `launcher{port}` (the WebSocket port + 1,
+7879 by default), or null when it is off; keep the last value per Mac, and forget it on null.
+
+When the phone can't reach the Mac and has a launcher port, offer "Start Mindmill on <Mac name>". Asking is plain
+TCP to the same hosts as the WebSocket (in the same order, a short timeout each), one line each way, UTF-8, ending
+in `\n`:
+
+1. Mac: `MINDMILL 1 <nonce>` (32 hex characters, new for every connection).
+2. Phone, within 10 seconds: `START <proof>`, where `proof` = SHA-256 in lower-case hex of `tokenHash + nonce`,
+   and `tokenHash` = SHA-256 in lower-case hex of the device token (both as UTF-8 text, joined without a space).
+   The token itself never goes over this connection.
+3. Mac: `OK started` (Mindmill is starting, in the background), `OK running` (it was running already) or `NO` (not
+   a paired phone, or the launcher is off). Then it closes.
+
+After `OK`, connect as usual with the backoff above; Mindmill needs a few seconds to start. Nothing answering on the
+launcher port means it is off, the Mac sleeps or it can't be reached: say so in the layout, never as a toast.
+
 ## Messages
 
 JSON text frames, one message each:
@@ -77,7 +98,7 @@ payload. Headers:
 
 | Method | Params | Result |
 |---|---|---|
-| `hello` | `token` | `name`, `version`, `brain` (the AI's name: Claude, Codex…), `scope` (the Mac's current scope), `scopes[]` (`id, title, project, projectTitle, wide`, in the Mac's order, grouped by project), `sections[]` |
+| `hello` | `token` | `name`, `version`, `brain` (the AI's name: Claude, Codex…), `scope` (the Mac's current scope), `scopes[]` (`id, title, project, projectTitle, wide`, in the Mac's order, grouped by project), `sections[]`, `instance{id, name}` (the Mindmill instance open on the Mac; see [Instances](#instances)), `launcher` (`{port}` or null; see [Starting Mindmill from the phone](#starting-mindmill-from-the-phone)) |
 | `state` | | same as `hello` |
 | `entries.list` | `scope`, `section`, `query?`, `tags?[]`, `limit?` | `entries[]`: `id, section, scope, title, date, summary, tags[], fields{status, kind, owner, due, waiting_on, start, end, work_item, raised_in, proposed_by, reason}` |
 | `entries.search` | `query`, `scope?` | `entries[]` |
@@ -199,8 +220,9 @@ scope per Mac; `project.select` (an action) also makes it the Mac's current one.
 | Method | Params | Result |
 |---|---|---|
 | `projects.config.get` | | `current` (the Mac's current scope id, or null), `home` (the Mac's home folder), `projects[]`: `{id, title, locations[]{name, path, exists, repository}, scopes[]{id, title, wide, paths[], remotes[], includes[], related[], entries}}`. Paths start with `~` for the home folder |
-| `projects.config.save` | `id?` (none or `""`: a new project), `project{title, newId?, locations[]{name, path}, scopes[]{id?, title, wide?, paths[], remotes?[], includes?[], related?[]}}` | `id` (the project's), `scopes[]` (its scope ids, in order). Fails with `bad_params` and a message to show as is |
+| `projects.config.save` | `id?` (none or `""`: a new project), `project{title, newId?, locations[]{name, path}, scopes[]{id?, title, wide?, paths[], remotes?[], includes?[], related?[]}}`, `instance?` (a new project only: the id of the [instance](#instances) to add it to; left out, the open one) | `id` (the project's), `scopes[]` (its scope ids, in order), `instance` (the instance's id). Fails with `bad_params` and a message to show as is |
 | `folders.list` | `path?` (default `~`) | `path`, `parent` (null at the home folder), `folders[]{name, path, repository}`: the folders in it, hidden ones left out. Only folders under the Mac user's home folder |
+| `folders.create` | `parent` (a folder as `folders.list` gives it), `name` | `folder{name, path, repository}`: the new, empty folder, to pick as a location or an instance's folder. Fails with `bad_params` and a message to show as is when the name is empty, has a `/`, starts with `.`, or the folder exists |
 
 Saving:
 - A new project needs a `title` and at least one location. `newId` (a new project only) is its folder id: lowercase
@@ -217,6 +239,25 @@ Saving:
   project-wide scope. Ask the user first.
 - The Mac answers with `projects.changed` (and `index.changed`) to every phone, as it does after `project.select`
   and after any change to projects on the Mac.
+- A project's folder can be a new one: make it with `folders.create`, then add it as a location.
+- With `instance` set to another instance than the open one, the project goes into that instance's knowledge base;
+  the open instance's projects don't change, and the Mac sends no `projects.changed`.
+
+### Instances
+
+A Mindmill **instance** is a knowledge base of its own: a folder on the Mac with its own projects and scopes, and
+its own sessions, factories and tests on the Mac. The user keeps as many as they like (work and private, one per
+client…). One is open at a time; `hello` names it.
+
+| Method | Params | Result |
+|---|---|---|
+| `instances.list` | | `current` (the open instance's id), `instances[]{id, name, path, exists, projects}`: `path` starts with `~` for the home folder, `exists` is false when its folder is gone, `projects` is how many projects it has |
+| `instance.create` | `name`, `path` (a folder under the home folder: new, empty, or a knowledge base already), `open?` (true: switch to it as `instance.switch` does) | `id`, `switching` (true when it opens it). Fails with `bad_params` and a message to show as is (the name is taken, the folder holds other files…) |
+| `instance.switch` | `id` | `switching`: true when the Mac now restarts Mindmill on that instance, false when it was open already. Fails with `unavailable` where the computer can't switch from the phone |
+
+After `switching: true` the connection closes while Mindmill restarts on the Mac (a few seconds). Reconnect with the
+backoff above; the new `hello` names the instance and its `scopes[]`. Forget the current scope when it isn't among
+them, and refresh what is on screen. Renaming and removing instances is done on the Mac.
 
 ### Actions
 
@@ -373,7 +414,8 @@ plugins (Codex), the plugin methods fail with `unavailable`.
 
 ### Voice
 
-The phone never sees or stores an API key. It asks the Mac which engine to use:
+The phone never stores an API key and never gets one back: it can send one the user types for the Mac to keep
+(`voice.key.set`), and only learns whether the Mac holds one. It asks the Mac which engine to use:
 
 - **keyless** (default): the phone recognises speech on the device, sends the text with `voice.say`, and speaks the
   `voice.sentence` events with its own text-to-speech as they arrive.
@@ -388,7 +430,11 @@ The phone never sees or stores an API key. It asks the Mac which engine to use:
 | `voice.say` | `conversation`, `text` | `turn` |
 | `voice.interrupt` | `conversation` | `stopped`: the user started talking; the Mac stops the turn and the phone stops speaking |
 | `voice.end` | `conversation` | `ended` |
-| `voice.test` | | `ok` (boolean), `message` (for the user), `providerName?`: checks the voice API key the Mac holds |
+| `voice.test` | `provider?` (default: the one in use) | `ok` (boolean), `message` (for the user), `providerName?`: checks the voice API key the Mac holds |
+| `voice.providers` | | `providers[]{id, name, available (works end to end; the others are listed for later), hasKey, keyPage (where to get a key), models[], model, voices[], voice}`, `active?` (the provider in use), `engine` (`keyless`/`api`, as `voice.config`) |
+| `voice.key.set` | `provider`, `key`, `use?` (default true) | `saved`, `ok`, `message` (the key checked as `voice.test` does). The Mac keeps it in its Keychain; the phone forgets it once sent. With `use` (and an `available` provider), voice goes through that provider from now on |
+| `voice.key.remove` | `provider` | `removed`; when it was in use, voice goes back to keyless |
+| `voice.use` | `provider?` (absent or empty: keyless), `model?`, `voice?` | as `voice.config`. A provider the Mac holds no key for, or one not `available`, fails with `bad_params` |
 
 | Event | Data | What to do |
 |---|---|---|
@@ -399,7 +445,7 @@ The phone never sees or stores an API key. It asks the Mac which engine to use:
 | `voice.transcript` | `conversation, role (user/assistant), text, final` | API engine: show the text. `text` is everything so far in that turn (a non-final one replaces the last), and the user's turn ends with a final one |
 | `voice.state` | `conversation, state (listening/thinking/speaking)` | API engine: show the state |
 | `voice.clear` | `conversation` | API engine: the user barged in; drop queued audio now |
-| `voice.fallback` | `conversation, reason, speech` | Speak `speech`, then carry on keyless in the same conversation |
+| `voice.fallback` | `conversation, reason (badKey/quota/network/keyLocked/other), speech, message?` | Speak `speech`, then carry on keyless in the same conversation; show `message` (why, and what to do). `keyLocked`: the Mac is waiting for its user to allow reading the key (macOS asks for the login password after Mindmill is updated); sending the key again with `voice.key.set` also fixes it |
 
 ### Testing and deliveries
 
@@ -407,8 +453,10 @@ The Mac builds and tests what sessions and factories make, and delivers builds a
 
 | Method | Params | Result |
 |---|---|---|
-| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, unavailable?` (why this computer can't deliver it, e.g. an iPhone build on Windows), `checklist[]{id, title, status (ok/missing/unknown), required, help}` (`ready` is true when every `required` item is ok; the others, like Tailscale for away from home, don't block); `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `checking` (true while the computer's tools are still being looked at, right after it starts: what depends on them is `unknown`, not `missing`, nothing is `ready` yet; ask again in a few seconds); a phone gets only the targets it can try itself (Android: Android apps and websites; iPhone: iOS apps and websites), each with `kind` (apk/url/preview…: how it reaches the phone); `deliveries[]` (`id, scope, target, kind, title, state (building/ready/sent/installed/failed), created, platform?, url?, size?, message?`: a `building` one has nothing to install yet, a `failed` one says why in `message`); `note?` (none of the scope's repositories is on this computer). A project-wide scope covers its scopes' repositories; the first status of a scope detects its targets |
+| `test.status` | `scope?` | `targets[]`: `id, type, title, method, methodTitle, ready, unavailable?` (why this computer can't deliver it, e.g. an iPhone build on Windows), `checklist[]{id, title, status (ok/missing/unknown), required, help}` (`ready` is true when every `required` item is ok; the others, like Tailscale for away from home, don't block); `compatibility{checked, good, findings[]{title, detail, canStill, cannot}}`; `checking` (true while the computer's tools are still being looked at, right after it starts: what depends on them is `unknown`, not `missing`, nothing is `ready` yet; ask again in a few seconds); a phone gets only the targets it can try itself (Android: Android apps and websites; iPhone: iOS apps and websites), each with `kind` (apk/url/preview…: how it reaches the phone); `deliveries[]` (`id, scope, target, kind, title, state (building/ready/sent/installed/failed), created, platform?, url?, size?, message?, session?, hasLog`: a `building` one has nothing to install yet, a `failed` one says why in `message`; `session` is the session whose version was built; `hasLog`: `test.log` has its output); `note?` (none of the scope's repositories is on this computer). A project-wide scope covers its scopes' repositories; the first status of a scope detects its targets |
 | `test.download` | `delivery` | `name, size, sha256, chunks`; then the file arrives as `file` binary frames |
+| `test.log` | `delivery` | `log` (what the build and tests printed, the last 60,000 characters), `firstError?` (the first error line in it). `not_found` when the delivery has no log yet |
+| `test.sources` | `scope?` | `local{branch?}` (this Mac's own copy of the project and the branch it is on), `sessions[]{id, title, branch?}` (Build sessions working in their own copy of one of the scope's repositories). Takes a few seconds: it asks git. Pass a session's `id` as `session` to `test.deliver` to build its version; leave `session` out for the Mac's own |
 | `test.installed` | `delivery`, `ok`, `message?` | `noted` |
 | `test.send` | `delivery` | `sent`, `platform?`: the delivery goes again, as the `test.delivery` event, to the phones of its platform (all phones when it has none), with a push to those not connected. For a desktop client, which shows `apk` and `testflight` deliveries but never installs them: its "Send to phone". A review card's build goes with `review.respond` `install` |
 | `preview.get` | `delivery`, `path` | `mime`, `base64`: one file of a preview page; load previews in a web view that fetches every request this way. A backend preview's "try a call" panel asks for `try?method=GET&path=/x&body=…`, which the Mac makes against the local service and answers as text |
@@ -576,7 +624,7 @@ described after the tables.
 | `today.plan` | read | `day?` | The day's plan: what to do today, what to decide, and the side goal. |
 | `today.check` | write | `item` (integer), `done` (boolean) | Tick an item of today's plan, or untick it. |
 | `today.morning` | write |  | Run the morning routine: read mail and calendar and write today's plan. |
-| `sync.calendar` | write |  | Sync the calendar into meetings now. |
+| `sync.calendar` | write |  | Sync the calendar into meetings now. Fails with a message when no calendar is connected. |
 | `sync.email` | write |  | Read new mail for reminders now. |
 
 ### Meetings
@@ -702,7 +750,7 @@ Mac offers a Plan session that reviews the sprint with Claude's connector instea
 | `test.status` | read | `scope?` | Testing set-up and the latest test delivery for a project. |
 | `test.detect` | write | `scope?` | Look for what can be tested in a project again (apps, web, services); data `targets[]{id, type, title}`. A project-wide scope covers its scopes' repositories. |
 | `test.check` | write | `scope?` | Check this Mac's tools and the project's compatibility for testing again. |
-| `test.deliver` | write | `target`, `scope?`, `session?` (the Build session it comes from) | Build a test target and deliver it: to the phone, a preview, a link. A Build session's "Test" button, and the Test screen's "Build" for a target that is `ready` with no `unavailable`. The answer comes when the build is done, often minutes later: wait up to 45 minutes. Meanwhile `test.status` lists the delivery with `state: building` |
+| `test.deliver` | write | `target`, `scope?`, `session?` (the Build session whose version to build, from `test.sources`; absent: the Mac's own copy) | Build a test target and deliver it: to the phone, a preview, a link. A Build session's "Test" button, and the Test screen's "Build" for a target that is `ready` with no `unavailable`. The answer comes when the build is done, often minutes later: wait up to 45 minutes. Meanwhile `test.status` lists the delivery with `state: building` |
 | `test.server.stop` | destructive | `id` | Stop a running dev server. |
 
 ### Projects

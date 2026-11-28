@@ -67,6 +67,35 @@ extension MindmillEngine {
     }
 }
 
+/// A voice API key read from the secret store (`readVoiceKey`).
+public enum VoiceKeyRead: Equatable, Sendable {
+    case key(String)
+    /// None saved.
+    case missing
+    /// Saved, but reading it was refused or is still waiting for the user to allow it.
+    case locked
+}
+
+public struct VoiceStartError: LocalizedError {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
+}
+
+/// The first of several racing tasks claims it.
+final class Once: @unchecked Sendable {
+    private var done = false
+    private let lock = NSLock()
+
+    func claim() -> Bool {
+        lock.withLock {
+            if done { return false }
+            done = true
+            return true
+        }
+    }
+}
+
 /// Voice conversations (remote-api.md, Voice): a persistent Claude session per conversation with the action tools
 /// (the "brain"), driven by the client that owns the microphone: a phone, the desktop shell's Voice screen or the
 /// Mac's own voice mode. Keyless: the client recognises and speaks, sending `voice.say` and speaking `voice.sentence`.
@@ -79,6 +108,36 @@ extension MindmillEngine {
     }
 
     public var voiceKeys: SecretVoiceKeys { SecretVoiceKeys(platform.secrets) }
+
+    /// The voice API key for `provider`, read away from the main thread: macOS asks for the login password before a
+    /// new build of Mindmill may read it, and no one may be at the Mac to answer. `locked` once `wait` passes with
+    /// no answer (the read carries on, so the key is there next time) or when reading it was refused.
+    public func readVoiceKey(_ provider: String, wait: TimeInterval = 10) async -> VoiceKeyRead {
+        let name = SecretVoiceKeys.name(provider)
+        guard platform.secrets.hasSecret(name) else { return .missing }
+        let read: Task<String?, Never>
+        if let pending = voiceKeyReads[provider] {
+            read = pending
+        } else {
+            nonisolated(unsafe) let store = platform.secrets
+            read = Task.detached { store.secret(name) }
+            voiceKeyReads[provider] = read
+            Task { [weak self] in
+                _ = await read.value
+                if self?.voiceKeyReads[provider] == read { self?.voiceKeyReads[provider] = nil }
+            }
+        }
+        let value: String?? = await withCheckedContinuation { done in
+            let once = Once()
+            Task { let v = await read.value; if once.claim() { done.resume(returning: .some(v)) } }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, wait) * 1_000_000_000))
+                if once.claim() { done.resume(returning: .none) }
+            }
+        }
+        guard let got = value, let key = got, !key.isEmpty else { return .locked }
+        return .key(key)
+    }
 
     /// Starts a conversation's brain: a persistent Claude session with the action tools, streaming its reply.
     public func startVoiceConversation(scope: String?, engine: VoiceEngineKind? = nil) async -> VoiceConversation {
@@ -137,13 +196,19 @@ extension MindmillEngine {
 
     /// Connects a conversation to its realtime API; without a provider, key or wire it falls back to keyless and
     /// says so.
-    public func startRealtime(_ c: VoiceConversation, audioOut: @escaping (RealtimeRelay.Audio) -> Void) {
+    public func startRealtime(_ c: VoiceConversation, keyWait: TimeInterval = 10, audioOut: @escaping (RealtimeRelay.Audio) -> Void) async {
         let prefs = VoicePreferences.load()
-        guard let provider = prefs.provider, let key = voiceKeys.key(provider: provider), !key.isEmpty,
-              let wire = RealtimeWires.wire(for: provider) else {
+        guard let provider = prefs.provider, let wire = RealtimeWires.wire(for: provider) else {
             voiceFallBack(c, .badKey)
             return
         }
+        let key: String
+        switch await readVoiceKey(provider, wait: keyWait) {
+        case .key(let k): key = k
+        case .missing: voiceFallBack(c, .badKey); return
+        case .locked: voiceFallBack(c, .keyLocked); return
+        }
+        guard voiceConversations[c.id] != nil else { return }
         let relay = RealtimeRelay(wire: wire, conversation: c, layer: actions,
                                   askBrain: { [weak self, weak c] request in
                                       guard let self, let c else { return "The brain isn't available." }
@@ -162,10 +227,21 @@ extension MindmillEngine {
 
     /// Live voice in a work session (`voice.start` with `session`): no brain of its own; the realtime model hands
     /// what the user says to the session and says its progress and answer. Without the API engine it can't start.
-    public func startSessionVoice(_ s: WorkSession, audioOut: @escaping (RealtimeRelay.Audio) -> Void) -> VoiceConversation? {
+    public func startSessionVoice(_ s: WorkSession, keyWait: TimeInterval = 10,
+                                  audioOut: @escaping (RealtimeRelay.Audio) -> Void) async throws -> VoiceConversation {
         let prefs = VoicePreferences.load()
-        guard voiceEngineChoice.engine() == .api, let provider = prefs.provider, let key = voiceKeys.key(provider: provider), !key.isEmpty,
-              let wire = RealtimeWires.wire(for: provider) else { return nil }
+        guard voiceEngineChoice.engine() == .api, let provider = prefs.provider, let wire = RealtimeWires.wire(for: provider) else {
+            throw VoiceStartError("Live voice in a session needs a voice API key in Settings → Voice on the \(platform.machineWord).")
+        }
+        let key: String
+        switch await readVoiceKey(provider, wait: keyWait) {
+        case .key(let k): key = k
+        case .missing:
+            throw VoiceStartError("Live voice in a session needs a voice API key in Settings → Voice on the \(platform.machineWord).")
+        case .locked:
+            throw VoiceStartError(VoiceEngineChoice.fallbackMessage(.keyLocked, provider: RealtimeProvider.with(id: provider)?.name,
+                                                                    machine: platform.machineWord))
+        }
         let c = VoiceConversation(scope: s.project)
         c.engine = .api
         c.sessionID = s.id
@@ -223,7 +299,9 @@ extension MindmillEngine {
         realtimeRelays[c.id] = nil
         c.apiFailed = true
         c.engine = .keyless
-        c.emit(.fallback(reason: reason, speech: VoiceEngineChoice.fallbackSpeech(reason)))
+        let provider = RealtimeProvider.with(id: VoicePreferences.load().provider)?.name
+        c.emit(.fallback(reason: reason, speech: VoiceEngineChoice.fallbackSpeech(reason),
+                         message: VoiceEngineChoice.fallbackMessage(reason, provider: provider, machine: platform.machineWord)))
     }
 
     /// The realtime model's `ask_brain`: one turn of the conversation's Claude session, answered in text.
@@ -242,12 +320,15 @@ extension MindmillEngine {
                 sessions.loadIfNeeded()
                 guard let s = sessions.session(id) else { throw RemoteError.notFound("No such session") }
                 var holder: VoiceConversation?
-                guard let c = startSessionVoice(s, audioOut: { [weak client] audio in
-                    guard let id = holder?.id else { return }
-                    client?.sendBinary(RemoteFrame(header: ["kind": "voice", "conversation": .string(id), "format": "pcm24k",
-                                                            "seq": .number(Double(audio.seq))], payload: audio.pcm).encoded())
-                }) else {
-                    throw RemoteError(code: "unavailable", message: "Live voice in a session needs a voice API key in Settings → Voice on the \(platform.machineWord).")
+                let c: VoiceConversation
+                do {
+                    c = try await startSessionVoice(s, audioOut: { [weak client] audio in
+                        guard let id = holder?.id else { return }
+                        client?.sendBinary(RemoteFrame(header: ["kind": "voice", "conversation": .string(id), "format": "pcm24k",
+                                                                "seq": .number(Double(audio.seq))], payload: audio.pcm).encoded())
+                    })
+                } catch {
+                    throw RemoteError(code: "unavailable", message: error.localizedDescription)
                 }
                 holder = c
                 c.owner = ObjectIdentifier(client)
@@ -270,9 +351,11 @@ extension MindmillEngine {
                 client.send(.event(name: name, data: data))
             }
             if engine == .api {
-                startRealtime(c) { [weak client] audio in
-                    client?.sendBinary(RemoteFrame(header: ["kind": "voice", "conversation": .string(c.id), "format": "pcm24k",
-                                                            "seq": .number(Double(audio.seq))], payload: audio.pcm).encoded())
+                Task {
+                    await startRealtime(c) { [weak client] audio in
+                        client?.sendBinary(RemoteFrame(header: ["kind": "voice", "conversation": .string(c.id), "format": "pcm24k",
+                                                                "seq": .number(Double(audio.seq))], payload: audio.pcm).encoded())
+                    }
                 }
             }
             return ["conversation": .string(c.id), "engine": .string(c.engine.rawValue)]

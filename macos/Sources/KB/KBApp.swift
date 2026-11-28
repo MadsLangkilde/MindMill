@@ -7,11 +7,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(BackgroundMode.startsHidden ? .accessory : .regular)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.activate(ignoringOtherApps: true)
+        if BackgroundMode.startsHidden {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { BackgroundMode.closeMainWindow() }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        followWindowsWithTheDockIcon()
         TextInputCursor.install()
         if let path = ProcessInfo.processInfo.environment["KB_SNAPSHOT"], !path.isEmpty {
             startSnapshots(to: URL(fileURLWithPath: path))
@@ -47,7 +52,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        !BackgroundMode.keepsRunning
+    }
+
+    /// Running on in the background: the Dock icon goes with the last window and comes back with the next one.
+    private func followWindowsWithTheDockIcon() {
+        let center = NotificationCenter.default
+        center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            MainActor.assumeIsolated {
+                guard BackgroundMode.keepsRunning, let closing = note.object as? NSWindow, closing.canBecomeMain else { return }
+                DispatchQueue.main.async {
+                    if !BackgroundMode.hasOpenWindow(except: closing) { NSApp.setActivationPolicy(.accessory) }
+                }
+            }
+        }
+        center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            MainActor.assumeIsolated {
+                guard NSApp.activationPolicy() != .regular, let w = note.object as? NSWindow, w.canBecomeMain else { return }
+                NSApp.setActivationPolicy(.regular)
+            }
+        }
     }
 
     @MainActor
@@ -58,10 +82,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model?.goalChats.values.forEach { $0.stop() }
         model?.askConversations.values.forEach { $0.chat.stop() }
         model?.testing.stopServers()
+        model?.relaunchIfSwitching()
     }
 
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let reply = askToSave()
+        if reply == .terminateCancel { model?.pendingInstance = nil }
+        return reply
+    }
+
+    @MainActor
+    private func askToSave() -> NSApplication.TerminateReply {
         guard let model, model.hasUnsavedChanges else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Save changes to “\(model.document?.title ?? "this entry")”?"
@@ -81,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct KBApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel()
+    @AppStorage(BackgroundMode.keepRunningKey) private var keepsRunning = false
 
     init() {
         // Scroll bars float over the content (shown while scrolling) instead of taking a column: a list that gains a
@@ -141,6 +174,12 @@ struct KBApp: App {
             AppSettingsView()
                 .environment(model)
         }
+
+        MenuBarExtra("Mindmill", systemImage: "fanblades", isInserted: $keepsRunning) {
+            MenuBarMenu()
+                .environment(model)
+                .onAppear { delegate.model = model }
+        }
     }
 }
 
@@ -150,6 +189,14 @@ struct KBCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .appSettings) {
             Button("Set Up Mindmill…") { model.onboardingForced = true }
+            if model.instances.instances.count > 1 {
+                Menu("Switch Instance") {
+                    ForEach(model.instances.instances) { i in
+                        Button(i.name) { model.switchInstance(to: i) }
+                            .disabled(i.id == model.instance.id)
+                    }
+                }
+            }
             Button("Sign In to Azure…") { model.openAzureSignIn() }
         }
         CommandGroup(replacing: .newItem) {

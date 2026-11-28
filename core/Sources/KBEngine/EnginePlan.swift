@@ -720,6 +720,7 @@ extension MindmillEngine {
         }
 
         a.register("sync.calendar") { [unowned self] _ in
+            guard await resolveCalendarSource().isSet else { throw ActionError(RoutineCenter.noCalendar) }
             guard routines.syncCalendar() else {
                 throw ActionError(claudeExecutable == nil ? claudeMissingExplanation : "The calendar is syncing already.")
             }

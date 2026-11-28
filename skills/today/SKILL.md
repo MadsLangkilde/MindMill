@@ -1,7 +1,7 @@
 ---
 name: today
 description: The morning routine. Checks today's calendar, the user's work items and pull requests, the knowledge base's open follow-ups, proposals and pending decisions across all projects, then writes the day plan (daily/<date>.md), prepares today's meetings, and proposes backlog items. Use for "start my day", "morning routine", "what's on today", "plan my day", /mindmill:today, and when the Mindmill app's Run morning routine button starts it.
-allowed-tools: Bash(kb:*), Bash(curl:*), Bash(git:*), Read, Grep, Glob, Write, Edit, Skill, mcp__claude_ai_Microsoft_365__outlook_calendar_search, mcp__claude_ai_Microsoft_365__outlook_email_search, mcp__claude_ai_Microsoft_365__chat_message_search, mcp__claude_ai_Microsoft_365__teams_list_chats, mcp__claude_ai_Microsoft_365__read_resource
+allowed-tools: Bash(kb:*), Bash(curl:*), Bash(git:*), Read, Grep, Glob, Write, Edit, Skill, mcp__claude_ai_Microsoft_365__outlook_calendar_search, mcp__claude_ai_Google_Calendar, mcp__claude_ai_Microsoft_365__outlook_email_search, mcp__claude_ai_Microsoft_365__chat_message_search, mcp__claude_ai_Microsoft_365__teams_list_chats, mcp__claude_ai_Microsoft_365__read_resource
 ---
 
 # Start the day
@@ -18,7 +18,7 @@ into the KB goes into that project's own folders.
 
 | Source | What |
 |---|---|
-| Calendar | Run the `mindmill:calendar` skill for today and tomorrow first; it mirrors the events as meeting files. Then read today's meetings with `kb list --section meetings` per project. If it fails, say so under Questions for you and carry on. |
+| Calendar | Run the `mindmill:calendar` skill for today and tomorrow first; it mirrors the events as meeting files. Then read today's meetings with `kb list --section meetings` per project. If it fails, say so under Questions for you and carry on. When no calendar is connected to Mindmill, skip the skill, use the meetings already in the KB and don't mention it. |
 | Tracker, per distinct tracker in the projects' settings | Work items assigned to the user in the current sprint that aren't Done, with state; PRs where the user is a reviewer and hasn't voted; the user's own PRs with new comments or failing builds. Azure DevOps: WIQL with `@Me` and the `_apis/git/pullrequests` API, PAT from `~/.git-credentials`. |
 | Sprints | `kb sprint status --json`: a tracker whose current sprint started in the last two days, or whose `state` is `ended` (no sprint after it), gets one **To decide** line: review what the previous sprint left unfinished (in Mindmill: Build → Ready to Start, or Today's sprint card), and for `ended` add the next sprint. Jira and other trackers reached through Claude: check their board's sprints the same way only if the connector is at hand. |
 | KB, per project | Open follow-ups (overdue and due today first), decisions with `status: proposed` (waiting for sign-off), meetings still `prepared`/`live`/`review`, the inbox count, proposed backlog items. |

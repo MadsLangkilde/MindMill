@@ -25,7 +25,7 @@ public final class FactoryLoop {
     @ObservationIgnored public var assigning: Set<Int> = []
     @ObservationIgnored var coverageChecking: Set<UUID> = []
     /// Where the factories are saved; tests point it elsewhere.
-    @ObservationIgnored public var storeURL = AppPaths.file("factories.json")
+    @ObservationIgnored public var storeURL = AppPaths.instanceFile("factories.json")
 
     init(engine: MindmillEngine) {
         self.engine = engine

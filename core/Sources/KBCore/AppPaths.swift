@@ -17,6 +17,15 @@ public enum AppPaths {
     /// A file or folder in the data folder.
     public static func file(_ name: String) -> URL { data.appendingPathComponent(name) }
 
+    /// The open instance's own data (sessions, factories, tests, scans): `MindmillInstance.dataFolder(in:)`. Set once
+    /// at launch, before anything reads it; nil is the data folder itself. The remote identity and paired phones stay
+    /// in the data folder, shared by every instance.
+    public nonisolated(unsafe) static var instanceFolder: URL?
+
+    public static var instanceData: URL { instanceFolder ?? data }
+
+    public static func instanceFile(_ name: String) -> URL { instanceData.appendingPathComponent(name) }
+
     static var applicationSupport: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     }

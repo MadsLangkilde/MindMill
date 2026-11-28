@@ -159,7 +159,7 @@ public final class TrackerCache {
     /// The scope's tracker kind from its settings: azure-devops, jira, local, github or none.
     public func kind(_ scope: String) -> String {
         if let k = kindCache[scope] { return k }
-        let k = ProjectSettings.load(project: scope, root: engine.rootURL).tracker.kind
+        let k = ProjectSettings.tracker(scope: scope, root: engine.rootURL).kind
         kindCache[scope] = k
         return k
     }

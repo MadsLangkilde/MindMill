@@ -121,8 +121,9 @@ public struct LocalTracker: Equatable, Sendable {
 
     // MARK: File
 
+    /// The board `scope` works in: its own, or its project's Overview's when it has no tracker of its own.
     public static func url(scope: String, root: URL) -> URL {
-        KBLayout.of(root: root).privateDir(scope).appendingPathComponent("work.json")
+        KBLayout.of(root: root).privateDir(ProjectSettings.trackerScope(scope, root: root)).appendingPathComponent("work.json")
     }
 
     public static func load(scope: String, root: URL) -> LocalTracker {

@@ -126,7 +126,7 @@ final class MeetingController {
     /// the app loses nothing. The Claude session itself resumes from `session_id` in the meeting file.
     private var chatURL: URL {
         let name = id.rawValue.replacingOccurrences(of: "/", with: "__")
-        return AppPaths.file("meeting-chats/\(name).json")
+        return AppPaths.instanceFile("meeting-chats/\(name).json")
     }
 
     private func restoreChat() {

@@ -356,13 +356,39 @@ extension ProjectDraft {
 
 /// The folders in a folder under the user's home, for picking a location from the phone.
 public enum FolderListing {
-    public static func list(_ path: String?, home: String = NSHomeDirectory()) throws -> JSONValue {
+    /// `path` (`~` for the home folder) as a full path, when it is under the home folder.
+    public static func underHome(_ path: String?, home: String = NSHomeDirectory()) throws -> (full: String, home: String) {
         let raw = (path?.isEmpty == false ? path! : "~")
         let full = URL(fileURLWithPath: ProjectDraft.expand(raw, home: home)).standardizedFileURL.resolvingSymlinksInPath().path
         let root = URL(fileURLWithPath: home).standardizedFileURL.resolvingSymlinksInPath().path
         guard full == root || full.hasPrefix(root + "/") else {
             throw NSError(domain: "KB", code: 2, userInfo: [NSLocalizedDescriptionKey: "Only folders in your home folder."])
         }
+        return (full, root)
+    }
+
+    /// Makes the empty folder `name` in `parent`, for the phone's folder picker.
+    public static func create(in parent: String, name: String, home: String = NSHomeDirectory()) throws -> JSONValue {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        func bad(_ m: String) -> NSError { NSError(domain: "KB", code: 2, userInfo: [NSLocalizedDescriptionKey: m]) }
+        guard !name.isEmpty else { throw bad("Give the folder a name.") }
+        guard !name.contains("/"), !name.contains(":") else { throw bad("A folder name can't have / or : in it.") }
+        guard !name.hasPrefix(".") else { throw bad("A folder name can't start with a dot.") }
+        let (dir, root) = try underHome(parent, home: home)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else { throw bad("That folder isn't there any more.") }
+        let full = dir + "/" + name
+        guard !FileManager.default.fileExists(atPath: full) else { throw bad("There's a \(name) in that folder already.") }
+        do {
+            try FileManager.default.createDirectory(atPath: full, withIntermediateDirectories: false)
+        } catch {
+            throw bad("Mindmill couldn't make the folder: \(error.localizedDescription)")
+        }
+        return ["name": .string(name), "path": .string(Registry.tildePath(full, home: root)), "repository": false]
+    }
+
+    public static func list(_ path: String?, home: String = NSHomeDirectory()) throws -> JSONValue {
+        let (full, root) = try underHome(path, home: home)
         let fm = FileManager.default
         let names = (try? fm.contentsOfDirectory(atPath: full)) ?? []
         let folders = names.filter { !$0.hasPrefix(".") }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.compactMap { name -> JSONValue? in

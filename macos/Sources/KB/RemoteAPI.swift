@@ -11,6 +11,7 @@ extension AppModel {
         remote.push = { [weak self] note, devices in self?.pusher.send(note, to: devices) }
         remote.pushReady = { [weak self] in self?.pusher.isSetUp ?? false }
         if UserDefaults.standard.bool(forKey: RemoteServer.enabledKey) { remote.start() }
+        syncLidAwakeFlag()
     }
 
     /// The methods the engine can't answer by itself on a Mac: meetings still live in the app.
@@ -30,7 +31,8 @@ extension AppModel {
 
     func setRemoteEnabled(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: RemoteServer.enabledKey)
-        if on { startRemoteIfEnabled() } else { remote.stop() }
+        if on { startRemoteIfEnabled() } else { remote.stop(); syncLidAwakeFlag() }
+        syncBackgroundAgents()
     }
 
     static func remoteSummary(_ e: KBEntry) -> JSONValue { RemotePayloads.entrySummary(e) }

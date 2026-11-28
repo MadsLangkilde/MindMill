@@ -5,10 +5,24 @@ import SwiftUI
 
 /// Calendar sync, the automatic morning routine, and connector sign-in.
 extension AppModel {
-    static let microsoft365 = "claude.ai Microsoft 365"
+    /// The calendar the sync mirrors; none until the user picks one.
+    var calendarSource: CalendarSource { engine.calendarChoice }
 
-    var microsoft365NeedsSignIn: Bool {
-        ["needs-auth", "failed"].contains(microsoft365Status) || connectorProblems.contains { $0.service.id == "m365" }
+    /// The chosen calendar's connector needs signing in again, or isn't connected to Claude.
+    var calendarNeedsSignIn: Bool {
+        let source = calendarSource
+        guard source.isSet else { return false }
+        return ["needs-auth", "failed"].contains(calendarStatus) || connectorProblems.contains { $0.server.name == source.server }
+    }
+
+    /// Picks the calendar the sync mirrors (`.none` for none), then syncs it.
+    func chooseCalendar(_ source: CalendarSource) {
+        guard engine.calendarSource != source else { return }
+        engine.calendarSource = source
+        calendarStatus = ""
+        calendarSync.error = nil
+        calendarSync.signInNeeded = false
+        if source.isSet, backgroundStarted { syncCalendar() }
     }
 
     var autoMorning: Bool { UserDefaults.standard.object(forKey: AppSettingsKeys.autoMorning) as? Bool ?? true }
@@ -24,16 +38,15 @@ extension AppModel {
         // Delivered on a later main-queue turn, outside any SwiftUI observation pass: mutating observable state
         // straight from the stream handler crashed the app (EXC_BAD_ACCESS in ObservationTracking).
         ClaudeChat.onConnectors = { [weak self] status in
-            guard let s = status[Self.microsoft365] else { return }
             DispatchQueue.main.async {
-                guard let self, self.microsoft365Status != s else { return }
-                // A session's start says "connected" before Microsoft refuses the sign-in, so it never clears a
+                guard let self, let s = status[self.calendarSource.server], self.calendarStatus != s else { return }
+                // A session's start says "connected" before the service refuses the sign-in, so it never clears a
                 // problem `claude mcp list` found: check again instead.
-                if s == "connected", self.microsoft365NeedsSignIn {
+                if s == "connected", self.calendarNeedsSignIn {
                     self.checkConnectors()
                     return
                 }
-                self.microsoft365Status = s
+                self.calendarStatus = s
             }
         }
         startDay()
@@ -64,14 +77,24 @@ extension AppModel {
         lastAutoDay = today
         if dailyDate != today { setDailyDate(today) }
         morningAfterSync = autoMorning && !FileManager.default.fileExists(atPath: DailyPlan.url(date: today, root: rootURL).path)
-        syncCalendar()
+        // The morning routine runs after the calendar sync, or straight away without a calendar.
+        if engine.calendarSource == nil {
+            Task { [weak self] in
+                guard let self else { return }
+                if await engine.resolveCalendarSource().isSet { syncCalendar() } else { runMorningIfDue() }
+            }
+        } else if calendarSource.isSet {
+            syncCalendar()
+        } else {
+            runMorningIfDue()
+        }
     }
 
     private func appBecameActive() {
         checkConnectors()
         if lastAutoDay != KBDate.today() {
             startDay()
-        } else if !microsoft365NeedsSignIn, calendarSync.lastRun.map({ Date().timeIntervalSince($0) > 600 }) ?? true {
+        } else if calendarSource.isSet, !calendarNeedsSignIn, calendarSync.lastRun.map({ Date().timeIntervalSince($0) > 600 }) ?? true {
             syncCalendar()
         }
         if pullRequests != nil { refreshPullRequests() }
@@ -83,8 +106,8 @@ extension AppModel {
     /// Days ahead the regular sync mirrors: today through the end of next week and a little more.
     static let calendarDaysAhead = RoutineCenter.calendarDaysAhead
 
-    /// Mirrors Outlook events as meeting files: by default today through two weeks on; `from`/`to` for a week the
-    /// user opens in the meetings calendar.
+    /// Mirrors the chosen calendar's events as meeting files: by default today through two weeks on; `from`/`to` for a
+    /// week the user opens in the meetings calendar. Does nothing without a calendar.
     func syncCalendar(from requestedFrom: String? = nil, to requestedTo: String? = nil) {
         engine.routines.syncCalendar(from: requestedFrom, to: requestedTo)
     }
@@ -94,16 +117,19 @@ extension AppModel {
         let r = engine.routines
         r.onConnectorTrouble = { [weak self] text in
             guard let self else { return }
-            // Claude Code reports the connector as connected while Microsoft refuses its sign-in.
-            if ConnectorSignIn.isNeeded(text) { microsoft365Status = "needs-auth" }
+            // Claude Code reports the connector as connected while the service refuses its sign-in. The email scan
+            // reads Microsoft 365 too, so its refusal counts when that is the calendar.
+            if calendarSync.signInNeeded || (calendarSource.kind == .microsoft365 && ConnectorSignIn.isNeeded(text)) {
+                calendarStatus = "needs-auth"
+            }
             checkConnectors(force: true)
         }
         r.onCalendarSynced = { [weak self] in
-            guard let self, microsoft365NeedsSignIn else { return }
-            microsoft365Status = "connected"
+            guard let self, calendarNeedsSignIn else { return }
+            calendarStatus = "connected"
         }
         r.afterCalendar = { [weak self] in self?.runMorningIfDue() }
-        r.needsSignIn = { [weak self] in self?.microsoft365NeedsSignIn ?? false }
+        r.needsSignIn = { [weak self] in self?.calendarNeedsSignIn ?? false }
     }
 
     private func runMorningIfDue() {
@@ -114,9 +140,9 @@ extension AppModel {
         runMorningRoutine()
     }
 
-    /// Opens Terminal on `claude /mcp`, where the user picks claude.ai Microsoft 365 → Authenticate.
-    /// KB checks again when it becomes active.
-    func signInToConnectors() {
+    /// Opens Terminal on `claude /mcp`, where the user picks the connector (`server`, or the one that needs it) →
+    /// Authenticate. KB checks again when it becomes active.
+    func signInToConnectors(_ server: String? = nil) {
         guard case .found(let exe) = claudeAvailability else {
             errorMessage = claudeMissingExplanation
             return
@@ -126,7 +152,7 @@ extension AppModel {
         #!/bin/zsh -il
         cd \(quote(rootURL.path))
         clear
-        echo "Sign in for Mindmill: choose “claude.ai Microsoft 365” → Authenticate, finish in the browser,"
+        echo "Sign in for Mindmill: choose \(server.map { "“\($0)”" } ?? "the tool that needs it") → Authenticate, finish in the browser,"
         echo "then type /exit and go back to Mindmill. Mindmill checks again by itself."
         echo
         \(quote(exe.path)) /mcp

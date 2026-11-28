@@ -12,27 +12,27 @@ extension AppModel {
     func checkConnectors(force: Bool = false) {
         guard !connectorsChecking, case .found = claudeAvailability else { return }
         if !force, let at = connectorsChecked {
-            let wait: TimeInterval = connectorProblems.isEmpty && !microsoft365NeedsSignIn ? 600 : 5
+            let wait: TimeInterval = connectorProblems.isEmpty && !calendarNeedsSignIn ? 600 : 5
             if Date().timeIntervalSince(at) < wait { return }
         }
         connectorsChecking = true
-        let hadM365Problem = microsoft365NeedsSignIn
+        let hadCalendarProblem = calendarNeedsSignIn
         Task {
             let r = await runClaude(["mcp", "list"])
             connectorsChecking = false
             connectorsChecked = Date()
             guard let r else { return }
             let servers = ClaudeConnectors.parse(r.stdout)
+            // Only for a setup finished before Mindmill asked; a new one picks the calendar in its Tools step.
+            if r.status == 0, onboardingCompleted { engine.adoptCalendarSource(from: servers) }
             guard !servers.isEmpty else { return }
             connectorServers = servers
-            let m365 = servers.filter { $0.name == Self.microsoft365 }
-            if m365.contains(where: { $0.status == .connected }) {
-                microsoft365Status = "connected"
-            } else if let s = m365.first {
-                microsoft365Status = s.status == .needsAuth ? "needs-auth" : s.status == .failed ? "failed" : microsoft365Status
+            if let s = calendarSource.server(in: servers) {
+                calendarStatus = s.status == .connected ? "connected" : s.status == .needsAuth ? "needs-auth"
+                    : s.status == .failed ? "failed" : calendarStatus
             }
-            if hadM365Problem, !microsoft365NeedsSignIn {
-                notice = "Microsoft 365 is connected again. Syncing the calendar."
+            if hadCalendarProblem, !calendarNeedsSignIn {
+                notice = "\(calendarSource.title) is connected again. Syncing the calendar."
                 syncCalendar()
             }
             scheduleConnectorRecheck()
@@ -44,7 +44,7 @@ extension AppModel {
     func scheduleConnectorRecheck() {
         connectorTimer?.invalidate()
         connectorTimer = nil
-        guard !connectorProblems.isEmpty || microsoft365NeedsSignIn else {
+        guard !connectorProblems.isEmpty || calendarNeedsSignIn else {
             connectorFixStarted = nil
             return
         }
@@ -64,7 +64,7 @@ extension AppModel {
         if server?.fromClaudeAI ?? true {
             NSWorkspace.shared.open(ConnectionsSettingsView.connectorsURL)
         } else {
-            signInToConnectors()
+            signInToConnectors(server?.name)
         }
     }
 
@@ -74,12 +74,12 @@ extension AppModel {
         let failures = [calendarSync.error.map { "Last calendar sync: \($0)" }, emailSync.error.map { "Last email scan: \($0)" }]
             .compactMap { $0 }.joined(separator: "\n")
         let brief = """
-        Help me find out why KB can't reach my tools, and fix it with me. KB reaches Outlook, Teams, Jira and the rest through Claude's connectors.
+        Help me find out why KB can't reach my tools, and fix it with me. KB reaches my calendar, mail, chat, Jira and the rest through Claude's connectors.\(calendarSource.isSet ? " My calendar is \(calendarSource.title), through the `\(calendarSource.server)` connector." : "")
 
         `claude mcp list` said:
         \(lines.isEmpty ? "(not checked yet)" : lines)
         \(failures.isEmpty ? "" : "\n\(failures)\n")
-        1. Run `claude mcp list` yourself to see it now, and for each tool KB needs, try one small read with it (for Microsoft 365: today's calendar with `outlook_calendar_search`, limit 1).
+        1. Run `claude mcp list` yourself to see it now, and for each tool KB needs, try one small read with it (for the calendar: today's events, one only).
         2. Explain each failure in a line, in plain words: "needs authentication" is an expired or revoked sign-in, often after a password change; claude.ai connectors are reconnected at claude.ai → Settings → Connectors (https://claude.ai/settings/connectors), others in Claude Code's `/mcp`.
         3. Tell me exactly what to click, one tool at a time, and wait for me to say it's done before checking again.
         4. When everything works, run `kb sync calendar` and tell me what it said.

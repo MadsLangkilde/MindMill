@@ -54,12 +54,17 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.2), value: model.notice)
         .themedWindow()
         .toolbar {
+            // sharedBackgroundVisibility is in the macOS 26 SDK, which comes with Swift 6.2.
+            #if compiler(>=6.2)
             if #available(macOS 26, *) {
                 ToolbarItem(placement: .navigation) { ModePicker() }
                     .sharedBackgroundVisibility(.hidden)
             } else {
                 ToolbarItem(placement: .navigation) { ModePicker() }
             }
+            #else
+            ToolbarItem(placement: .navigation) { ModePicker() }
+            #endif
             if !model.showOnboarding && !model.index.groups.isEmpty {
                 ToolbarItem(placement: .navigation) { ProjectSwitcher() }
             }

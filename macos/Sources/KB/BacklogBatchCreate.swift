@@ -115,7 +115,7 @@ struct BacklogBatchCreateSheet: View {
     private var created: Int { items.filter(\.isDone).count }
     private var allDone: Bool { !items.isEmpty && !running && items.allSatisfy { $0.isDone || $0.isFailed || !$0.include } && items.contains { $0.result != nil } }
     private var createTitle: String {
-        let kinds = Set(items.map { model.settings(for: $0.id.project).tracker.kind })
+        let kinds = Set(items.map { model.tracker(for: $0.id.project).kind })
         let label = Self.createLabel(kinds.count == 1 ? kinds.first! : "azure-devops")
         if kinds.count > 1 { return toCreate.count == 1 ? "Create It" : "Create \(toCreate.count)" }
         return toCreate.count <= 1 ? label : label.replacingOccurrences(of: "Create", with: "Create \(toCreate.count)")
@@ -123,7 +123,7 @@ struct BacklogBatchCreateSheet: View {
 
     private var trackerReady: Bool {
         Set(items.map(\.id.project)).allSatisfy { p in
-            let t = model.settings(for: p).tracker
+            let t = model.tracker(for: p)
             return t.kind == "local" || (t.kind == "azure-devops" && !t.organization.isEmpty && !t.project.isEmpty)
         }
     }
@@ -135,13 +135,13 @@ struct BacklogBatchCreateSheet: View {
         return out
     }
 
-    private func prefix(_ id: EntryID) -> String { model.settings(for: id.project).tracker.titlePrefix }
+    private func prefix(_ id: EntryID) -> String { model.tracker(for: id.project).titlePrefix }
 
     private func load() {
         guard items.isEmpty else { return }
         items = request.entries.compactMap { id in
             guard let e = model.index.entry(id), e.backlogStatus == .proposed else { return nil }
-            let t = model.settings(for: id.project).tracker
+            let t = model.tracker(for: id.project)
             let assignee = e.field("assignee") ?? t.assignee
             let parent = WorkItemLinks.parentNumber(e.field("parent")).map(String.init)
                 ?? model.inferredParent(e).map { String($0.number) }

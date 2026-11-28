@@ -99,12 +99,12 @@ extension AppModel {
     }
 
     func workItemURL(_ item: String, project: String) -> URL? {
-        let t = settings(for: project).tracker
+        let t = tracker(for: project)
         return TrackerLink.url(kind: t.kind, organization: t.organization, project: t.project, item: item)
     }
 
     /// The name of the scope's tracker: Azure DevOps, Jira, Mindmill…
-    func trackerName(_ project: String) -> String { TrackerLink.name(settings(for: project).tracker.kind) }
+    func trackerName(_ project: String) -> String { TrackerLink.name(tracker(for: project).kind) }
 
     /// The work item a session is about, if any.
     func sessionWorkItem(_ s: WorkSession) -> String? {

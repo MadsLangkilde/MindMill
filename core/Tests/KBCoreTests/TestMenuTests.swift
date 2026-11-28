@@ -94,6 +94,39 @@ struct ProjectDetectionTests {
         #expect(try JSONDecoder().decode(ScopeTestPlan.self, from: Data(old.utf8)).modules.isEmpty, "plans saved before modules still load")
     }
 
+    @Test func anAndroidAppInAFolderIsBuiltFromItsOwnGradleRoot() {
+        let l = RepoListing(files: [
+            "package.json": #"{"dependencies":{"@capacitor/core":"6"}}"#,
+            "android/gradlew": "", "android/settings.gradle": "include ':app'",
+            "android/build.gradle": "buildscript {}", "android/app/build.gradle": "apply plugin: 'com.android.application'",
+            "kmp/gradlew": "", "kmp/settings.gradle.kts": "include(\":shared\")",
+            "kmp/shared/build.gradle.kts": "plugins { kotlin(\"multiplatform\") }",
+        ])
+        let android = ProjectDetector.detect(l).filter { $0.type == .android && $0.partOf == nil }
+        #expect(android.map(\.path) == ["android"])
+        #expect(android.first?.startCommand == "./gradlew assembleDebug")
+    }
+
+    @Test func aScopeFoundByAnOlderDetectorKeepsWhatTheUserSetUpWhenItsAppMoves() throws {
+        var old = TestTarget(type: .android, repo: "/r", path: "", title: "R · Android app")
+        old.method = "apk"
+        old.confirmed = ["install-allowed"]
+        old.buildCommand = "gradle assembleDebug"
+        var plan = ScopeTestPlan()
+        plan.targets = [old]
+        let found = TestTarget(DetectedTarget(type: .android, path: "android", evidence: "Android Gradle project",
+                                              startCommand: "./gradlew assembleDebug", testCommand: "./gradlew testDebugUnitTest"),
+                               repo: "/r", repoTitle: "R")
+        plan.merge(detected: [found])
+        #expect(plan.targets.count == 1)
+        let t = try #require(plan.targets.first)
+        #expect(t.path == "android" && t.id == found.id && t.buildCommand == "./gradlew assembleDebug")
+        #expect(t.method == "apk" && t.confirmed == ["install-allowed"])
+        #expect(plan.detectorVersion == ProjectDetector.version)
+        let saved = try JSONDecoder().decode(ScopeTestPlan.self, from: Data(#"{"targets": []}"#.utf8))
+        #expect(saved.detectorVersion == 0)
+    }
+
     @Test func doesNotCountTheSameAppTwice() {
         let l = RepoListing(files: ["build.gradle": "com.android.application", "app/build.gradle": "com.android.application"])
         #expect(ProjectDetector.detect(l).count == 1)

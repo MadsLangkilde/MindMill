@@ -13,6 +13,13 @@ public protocol SecretStore: AnyObject {
     func setSecret(_ value: String?, name: String)
     /// Whether it is saved, without reading it (macOS can ask for the password when the value is read).
     func hasSecret(_ name: String) -> Bool
+    /// Changes whenever the secret does, without reading it where the store can (macOS: the item's modification
+    /// date); nil when it isn't saved.
+    func secretStamp(_ name: String) -> String?
+}
+
+public extension SecretStore {
+    func secretStamp(_ name: String) -> String? { secret(name).map { String($0.hashValue) } }
 }
 
 /// Secrets in memory, for tests and for hosts without a store yet.

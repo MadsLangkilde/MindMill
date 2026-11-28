@@ -309,32 +309,111 @@ extension MindmillEngine {
             return ["changed": .number(Double(changed))]
         }
 
-        m.register("voice.test") { [unowned self] _, _ in
+        m.register("voice.test") { [unowned self] _, params in
             let prefs = VoicePreferences.load()
-            guard let provider = prefs.provider, let p = RealtimeProvider.with(id: provider) else {
+            guard let provider = params["provider"]?.string ?? prefs.provider, let p = RealtimeProvider.with(id: provider) else {
                 return ["ok": false, "message": .string("No voice API key on the \(platform.machineWord). Add one in Settings → Voice there.")]
             }
-            guard let key = voiceKeys.key(provider: provider), !key.isEmpty else {
-                return ["ok": false, "message": .string("The \(p.name) key is missing on the \(platform.machineWord).")]
-            }
-            let message = await RealtimeKeyTest.test(provider: provider, key: key)
-            return ["ok": .bool(RealtimeKeyTest.passed(message)), "message": .string(message), "providerName": .string(p.name)]
+            return await voiceKeyTest(p)
         }
+        m.register("voice.providers") { [unowned self] _, _ in
+            let prefs = VoicePreferences.load()
+            let engine = voiceEngineChoice.engine()
+            return ["providers": .array(RealtimeProvider.all.map { p in
+                        ["id": .string(p.id), "name": .string(p.name), "available": .bool(p.available),
+                         "hasKey": .bool(platform.secrets.hasSecret(SecretVoiceKeys.name(p.id))), "keyPage": .string(p.keyPage),
+                         "models": .array(p.models.map(JSONValue.string)), "model": .string(prefs.model(for: p.id)),
+                         "voices": .array(p.voices.map(JSONValue.string)), "voice": .string(prefs.apiVoice(for: p.id))]
+                    }),
+                    "active": engine == .api ? prefs.provider.map(JSONValue.string) ?? .null : .null,
+                    "engine": .string(engine.rawValue)]
+        }
+        m.register("voice.key.set") { [unowned self] _, params in
+            guard let id = params["provider"]?.string, let p = RealtimeProvider.with(id: id) else { throw RemoteError.badParams("provider") }
+            let key = (params["key"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, key.count <= 4096, !key.contains(where: \.isNewline) else { throw RemoteError.badParams("key") }
+            voiceKeys.set(key, provider: id)
+            voiceKeyReads[id] = nil
+            if params["use"]?.bool ?? true, p.available {
+                var prefs = VoicePreferences.load()
+                prefs.provider = id
+                prefs.engine = .api
+                prefs.save()
+            }
+            checkVoiceSettings()
+            var out = await voiceKeyTest(p)
+            if case .object(var o) = out { o["saved"] = true; out = .object(o) }
+            return out
+        }
+        m.register("voice.key.remove") { [unowned self] _, params in
+            guard let id = params["provider"]?.string, RealtimeProvider.with(id: id) != nil else { throw RemoteError.badParams("provider") }
+            voiceKeys.set(nil, provider: id)
+            var prefs = VoicePreferences.load()
+            if prefs.provider == id {
+                prefs.provider = nil
+                prefs.engine = .keyless
+                prefs.save()
+            }
+            checkVoiceSettings()
+            return ["removed": true]
+        }
+        m.register("voice.use") { [unowned self] _, params in
+            var prefs = VoicePreferences.load()
+            if let id = params["provider"]?.string, !id.isEmpty {
+                guard let p = RealtimeProvider.with(id: id), p.available else { throw RemoteError.badParams("provider") }
+                guard platform.secrets.hasSecret(SecretVoiceKeys.name(id)) else {
+                    throw RemoteError(code: "bad_params", message: "The \(platform.machineWord) has no \(p.name) key. Send one first.")
+                }
+                prefs.provider = id
+                prefs.engine = .api
+                if let model = params["model"]?.string {
+                    guard p.models.contains(model) else { throw RemoteError.badParams("model") }
+                    prefs.models[id] = model
+                }
+                if let voice = params["voice"]?.string {
+                    guard p.voices.contains(voice) else { throw RemoteError.badParams("voice") }
+                    prefs.apiVoices[id] = voice
+                }
+            } else {
+                prefs.engine = .keyless
+            }
+            prefs.save()
+            checkVoiceSettings()
+            return prefs.remoteConfig(engine: voiceEngineChoice.engine())
+        }
+    }
+
+    /// `voice.test` for one provider: its key checked with the provider's cheapest call.
+    func voiceKeyTest(_ p: RealtimeProvider) async -> JSONValue {
+        let key: String
+        switch await readVoiceKey(p.id) {
+        case .key(let k): key = k
+        case .missing:
+            return ["ok": false, "message": .string("The \(p.name) key is missing on the \(platform.machineWord)."), "providerName": .string(p.name)]
+        case .locked:
+            return ["ok": false, "message": .string(VoiceEngineChoice.fallbackMessage(.keyLocked, provider: p.name, machine: platform.machineWord)),
+                    "providerName": .string(p.name)]
+        }
+        let message = await RealtimeKeyTest.test(provider: p.id, key: key)
+        return ["ok": .bool(RealtimeKeyTest.passed(message)), "message": .string(message), "providerName": .string(p.name)]
     }
 
     // MARK: Voice settings watch
 
-    /// What the phone needs to know about voice, with the key's presence and a fingerprint of it, so a new key
-    /// counts as a change.
+    /// What the phone needs to know about voice, with a stamp of each key that changes when it does, so a new key
+    /// counts as a change. Never reads a key: macOS would ask for the password at launch.
     func voiceSignature() -> String {
         let prefs = VoicePreferences.load()
-        let key = prefs.provider.flatMap { voiceKeys.key(provider: $0) } ?? ""
-        return "\(prefs.remoteConfig(engine: voiceEngineChoice.engine()))|\(key.isEmpty ? 0 : key.hashValue)"
+        let stamps = RealtimeProvider.all.map { platform.secrets.secretStamp(SecretVoiceKeys.name($0.id)) ?? "-" }
+        return "\(prefs.remoteConfig(engine: voiceEngineChoice.engine()))|\(stamps.joined(separator: ","))"
     }
 
     /// Checks every few seconds whether voice settings or keys changed, wherever they were changed, and tells phones.
     public func watchVoiceSettings() {
         voiceSignatureSeen = voiceSignature()
+        // Starts reading the key in use now, so whoever is at the computer can allow it before a phone needs it.
+        let prefs = VoicePreferences.load()
+        if prefs.engine == .api, let provider = prefs.provider { Task { _ = await readVoiceKey(provider, wait: 0) } }
         voiceWatch?.invalidate()
         voiceWatch = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkVoiceSettings() }

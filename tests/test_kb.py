@@ -1226,6 +1226,39 @@ class WorkTrackerTest(KbTestCase):
         self.assertEqual((rows[2]["tasks_done"], rows[2]["tasks_total"], rows[2]["scopes"]), (1, 2, ["app-a"]))
         self.assertEqual(rows[4]["stage"], "done")
 
+    def test_a_scope_without_a_tracker_uses_its_overviews_board(self):
+        (self.root / "kb.json").write_text(json.dumps({"version": 2, "projects": [
+            {"id": "prod", "title": "Prod", "scopes": [
+                {"id": "shared", "title": "Overview", "wide": True, "paths": [], "remotes": [], "related": []},
+                {"id": "app-a", "title": "A", "paths": [str(self.repo_a)], "remotes": [], "related": []},
+                {"id": "app-b", "title": "B", "paths": [str(self.repo_b)], "remotes": [], "related": []}]}]}))
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}), "--project", "shared")
+        self.cli("settings", "set", "tracker", json.dumps({"kind": "jira"}), "--project", "app-b")
+        self.assertEqual((kb.tracker_scope(self.root, "app-a"), kb.tracker_scope(self.root, "app-b"),
+                          kb.tracker_scope(self.root, "shared")), ("shared", "app-b", "shared"))
+        self.assertEqual(kb.work_path(self.root, "app-a"), self.work_file("shared"))
+
+        bid = self.cli("new", "backlog", "--type", "pbi", "--title", "Redo the buttons").stdout.split()[0]
+        r = subprocess.run([sys.executable, str(PLUGIN / "scripts" / "kb.py"), "backlog", "create", bid, "--yes"],
+                           cwd=self.repo_a, env=self.no_ado(), capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.work_file("app-a").exists())
+        self.assertEqual([i["title"] for i in json.loads(self.work_file("shared").read_text())["items"]], ["Redo the buttons"])
+        self.assertIn("Redo the buttons", self.cli("work", "list", "--scope", "app-a").stdout)
+        r = self.cli("tracker", "state", "--state", "Committed", "1", "--project", "app-a")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("#1 set to Committed", r.stdout)
+        self.assertEqual(json.loads(self.work_file("shared").read_text())["items"][0]["state"], "Committed")
+        local = [g for g in kb.sprint_trackers(self.root) if g["kind"] == "local"]
+        self.assertEqual([(g["key"], g["scopes"]) for g in local], [("local:shared", ["shared", "app-a"])])
+
+    def test_backlog_create_without_any_tracker_says_to_choose_one(self):
+        bid = self.cli("new", "backlog", "--type", "pbi", "--title", "T").stdout.split()[0]
+        r = self.cli("backlog", "create", bid, "--yes")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("has no tracker set up", r.stderr)
+        self.assertNotIn("azure-devops", r.stderr)
+
     def test_tracker_resolve_moves_finished_work_to_done_and_needs_yes(self):
         self.cli("settings", "set", "tracker", json.dumps({"kind": "local"}))
         self.cli("work", "add", "bug", "Crash on start", "--state", "Committed")

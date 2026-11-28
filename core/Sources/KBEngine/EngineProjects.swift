@@ -34,8 +34,25 @@ extension MindmillEngine {
         remote.broadcast("index.changed")
     }
 
+    /// `projects.config.save` of a new project into an instance that isn't open.
+    private func saveProjectElsewhere(_ p: JSONValue, instance id: String) throws -> JSONValue {
+        guard (p["id"]?.string ?? "").isEmpty else { throw RemoteError.badParams("Only a new project can go into another instance.") }
+        guard let target = instanceList().instance(id) else { throw RemoteError.notFound("There's no such instance on this \(platform.machineWord).") }
+        let r = (try? Registry.load(KBLayout.home(root: target.rootURL).appendingPathComponent("kb.json"))) ?? Registry()
+        do {
+            let draft = try ProjectDraft.from(json: p["project"] ?? [:], id: nil, registry: r)
+            let made = try addProject(draft, to: target)
+            return ["id": .string(made.project), "scopes": .array(made.scopes.map(JSONValue.string)), "instance": .string(target.id)]
+        } catch {
+            throw RemoteError.badParams(error.localizedDescription)
+        }
+    }
+
     func registerProjectMethods() {
         methods.register("projects.config.save") { [unowned self] _, p in
+            if let target = p["instance"]?.string, !target.isEmpty, target != instanceList().current {
+                return try saveProjectElsewhere(p, instance: target)
+            }
             let r = (try? Registry.load(registryURL)) ?? Registry()
             let draft: ProjectDraft
             do {
@@ -47,7 +64,8 @@ extension MindmillEngine {
             do {
                 let made = try await saveProjects([draft])
                 guard let first = made.first else { throw RemoteError.badParams("Nothing was saved.") }
-                return ["id": .string(first.project), "scopes": .array(first.scopes.map(JSONValue.string))]
+                return ["id": .string(first.project), "scopes": .array(first.scopes.map(JSONValue.string)),
+                        "instance": .string(instanceList().current)]
             } catch let e as RemoteError {
                 throw e
             } catch {

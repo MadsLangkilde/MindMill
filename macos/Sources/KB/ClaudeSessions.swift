@@ -210,6 +210,8 @@ extension AppModel {
         #!/bin/zsh -il
         cd \(quote(s.workingDirectory.path))
         export KB_ROOT=\(quote(rootURL.path))
+        export KB_CREW_DIR=\(quote(engine.sessions.crewDirectory.path))
+        export KB_SCANS_DIR=\(quote(engine.scans.directory.path))
         clear
         \(quote(exe.path)) --resume \(sid) --plugin-dir \(quote(KBConfig.expandTilde(pluginRootPath)))
         """

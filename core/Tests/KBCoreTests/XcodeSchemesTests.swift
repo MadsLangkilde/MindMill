@@ -34,6 +34,8 @@ struct XcodeSchemesTests {
         #expect(XcodeSchemes.firstError(xcode) == "cannot find 'Foo' in scope")
         let gradle = "FAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':app:compileDebugKotlin'.\n"
         #expect(XcodeSchemes.firstError(gradle) == "Execution failed for task ':app:compileDebugKotlin'.")
+        #expect(XcodeSchemes.firstError("$ gradle assembleDebug\nzsh:1: command not found: gradle\n") == "command not found: gradle")
+        #expect(XcodeSchemes.firstError("$ ./gradlew x\nzsh:1: no such file or directory: ./gradlew\n") == "no such file or directory: ./gradlew")
         #expect(XcodeSchemes.firstError("all good") == nil)
     }
 }

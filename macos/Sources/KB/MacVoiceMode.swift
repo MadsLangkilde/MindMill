@@ -61,8 +61,11 @@ final class MacVoiceMode {
         }
         prefs = VoicePreferences.load()
         var holder: ((RealtimeRelay.Audio) -> Void)?
-        guard let c = model.engine.startSessionVoice(session, audioOut: { audio in holder?(audio) }) else {
-            phase = .failed("Live talk in a session needs a voice API key: add one in Settings → Voice.")
+        let c: VoiceConversation
+        do {
+            c = try await model.engine.startSessionVoice(session, keyWait: 60, audioOut: { audio in holder?(audio) })
+        } catch {
+            phase = .failed(error.localizedDescription)
             return
         }
         sessionID = session.id
@@ -100,7 +103,7 @@ final class MacVoiceMode {
                 guard let c, let relay = self?.model?.realtimeRelays[c.id] else { return }
                 relay.sendAudio(pcm)
             }
-            if startRelay { model.startRealtime(c) { [weak self] audio in self?.playAPI(audio.pcm) } }
+            if startRelay { Task { await model.startRealtime(c) { [weak self] audio in self?.playAPI(audio.pcm) } } }
         }
         do {
             try l.start(language: prefs.language, voiceProcessing: true)
@@ -172,11 +175,11 @@ final class MacVoiceMode {
             }
         case .clear:
             apiPlayer?.stop()
-        case .fallback(_, let speech) where sessionID != nil:
+        case .fallback(_, _, let message) where sessionID != nil:
             stop()
-            phase = .failed(speech + " Type or dictate in the session meanwhile.")
-        case .fallback(_, let speech):
-            notice = speech
+            phase = .failed(message + " Type or dictate in the session meanwhile.")
+        case .fallback(_, let speech, let message):
+            notice = message
             switchToKeyless()
             speaker?.speak(speech)
         default:

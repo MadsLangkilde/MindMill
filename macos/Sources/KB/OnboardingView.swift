@@ -15,8 +15,7 @@ extension AppModel {
         case .found: found = true
         case .missing: found = false
         }
-        return onboardingInProgress || OnboardingGate.needed(completed: onboardingCompleted, aiFound: found,
-                                                             hasKnowledgeBase: hasKnowledgeBase, forced: onboardingForced)
+        return onboardingInProgress || OnboardingGate.needed(aiFound: found, hasKnowledgeBase: hasKnowledgeBase, forced: onboardingForced)
     }
 
     var pythonFound: Bool { shell?.python3.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false }
@@ -34,12 +33,12 @@ extension AppModel {
     }
 
     /// Starts the Claude session that checks, connects and saves the chosen tools, in Plan → Sessions.
-    func startSourceSetup(tracker: String?, tools: [String], servers: [ClaudeConnectors.Server]) {
+    func startSourceSetup(tracker: String?, tools: [String], calendar: CalendarSource = .none, servers: [ClaudeConnectors.Server]) {
         let scopes = index.projects.map { SourceSetup.Scope(id: $0.id, title: $0.title, tracker: trackerKind($0.id)) }
         var picked = UserTools.load(root: rootURL)
         picked.adopt(tools)
         try? picked.save(root: rootURL)
-        let brief = SourceSetup.brief(tracker: tracker, tools: tools, scopes: scopes, connected: servers)
+        let brief = SourceSetup.brief(tracker: tracker, tools: tools, calendar: calendar, scopes: scopes, connected: servers)
         mode = .plan
         sidebarSelection = .sessions
         openWindowAction?("main", nil)
@@ -104,6 +103,8 @@ struct OnboardingView: View {
     @State private var picked = false
     @State private var tracker: String?
     @State private var tools: Set<String> = []
+    /// nil until the user picks one in the Tools step: the saved choice stands.
+    @State private var calendar: CalendarSource?
     @State private var servers: [ClaudeConnectors.Server] = []
     @State private var serversLoaded = false
 
@@ -116,7 +117,9 @@ struct OnboardingView: View {
                     case .assistant: AssistantStep()
                     case .knowledgeBase: KnowledgeBaseStep()
                     case .voice: VoiceStep()
-                    case .tools: ToolsPicker(tracker: $tracker, tools: $tools, servers: $servers, loaded: $serversLoaded)
+                    case .background: BackgroundStep()
+                    case .tools: ToolsPicker(tracker: $tracker, tools: $tools, servers: $servers, loaded: $serversLoaded,
+                                             calendar: Binding(get: { calendar ?? model.calendarSource }, set: { calendar = $0 }))
                     }
                 }
                 .padding(.horizontal, 16)
@@ -139,6 +142,8 @@ struct OnboardingView: View {
             if case .found = now { model.checkClaudeSignIn() }
         }
     }
+
+    private var pickedCalendar: CalendarSource { calendar ?? model.calendarSource }
 
     private var assistantReady: Bool {
         guard case .found = model.claudeAvailability, case .signedIn = model.claudeSignIn.phase else { return false }
@@ -168,14 +173,19 @@ struct OnboardingView: View {
                 Button("Back") { step = OnboardingGate.Step(rawValue: step.rawValue - 1) ?? .assistant }
             }
             if step == .tools {
-                Button("Skip for Now") { model.finishOnboarding() }
-                    .help("Finish without connecting anything; Settings → Connections → Set Up with \(Brain.name) does it later")
-                Button("Set Up with \(Brain.name)") {
+                Button("Skip for Now") {
+                    model.chooseCalendar(pickedCalendar)
                     model.finishOnboarding()
-                    model.startSourceSetup(tracker: tracker, tools: Array(tools).sorted(), servers: servers)
+                }
+                .help("Finish without connecting anything now. The calendar you picked is kept; Settings → Connections → Set Up with \(Brain.name) does the rest later")
+                Button("Set Up with \(Brain.name)") {
+                    let picked = pickedCalendar
+                    model.chooseCalendar(picked)
+                    model.finishOnboarding()
+                    model.startSourceSetup(tracker: tracker, tools: Array(tools).sorted(), calendar: picked, servers: servers)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(tracker == nil && tools.isEmpty)
+                .disabled(tracker == nil && tools.isEmpty && !pickedCalendar.isSet)
             } else if step == .assistant, model.onboardingCompleted, !model.onboardingForced, model.hasKnowledgeBase {
                 Button("Done") { model.finishOnboarding() }
                     .keyboardShortcut(.defaultAction)
@@ -183,7 +193,11 @@ struct OnboardingView: View {
             } else {
                 Button("Continue") { step = OnboardingGate.Step(rawValue: step.rawValue + 1) ?? .tools }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(step == .assistant ? !assistantReady : step == .knowledgeBase ? !model.hasKnowledgeBaseFolder : false)
+                    .disabled(step == .assistant ? !assistantReady
+                              : step == .knowledgeBase ? !OnboardingGate.knowledgeBaseReady(hasKnowledgeBase: model.hasKnowledgeBase,
+                                                                                            projects: model.index.projects.count)
+                              : false)
+                    .help(step == .knowledgeBase && model.index.projects.isEmpty ? "Add a project first" : "")
             }
         }
         .padding(.horizontal, 16)
@@ -358,34 +372,44 @@ private struct AssistantStep: View {
     }
 }
 
-/// Step 2: where the knowledge base lives, and the first project in it.
+/// Step 2: Mindmill's own folder for everything it keeps across projects, never a project's folder, and the projects
+/// in it. Continue waits for the first project.
 private struct KnowledgeBaseStep: View {
     @Environment(AppModel.self) private var model
     @State private var path = ""
 
     var body: some View {
+        let typedURL = KBConfig.rootURL(for: path)
+        let typed = KnowledgeBaseFolder.check(typedURL)
+        let isCurrent = model.hasKnowledgeBase && typedURL == model.rootURL
         VStack(alignment: .leading, spacing: 12) {
             Text("2. Knowledge Base").font(.title2.weight(.semibold))
-            Text("A folder of Markdown files you own: decisions, meetings, facts and work, per project. Pick an existing one or a new folder.")
+            Text("Mindmill's own folder for everything it learns across all your projects: decisions, meetings, facts and work, as Markdown files you own. It isn't a project's folder: pick a new or empty one, or a Mindmill knowledge base you already have. Your projects' code stays where it is; you add the projects below.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !model.hasKnowledgeBase, case .inUse(let what) = KnowledgeBaseFolder.check(model.rootURL) {
+                Label("Mindmill was set to \(KBConfig.abbreviateTilde(model.rootURL.path)), which is \(what), not a knowledge base. Pick a new folder for it here; nothing in that folder was changed.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
             ChipRow(spacing: 8, alignment: .top) {
-                TextField("Folder", text: $path, prompt: Text(KBConfig.defaultRootPath))
+                TextField("Folder", text: $path, prompt: Text(KnowledgeBaseFolder.suggestedPath))
                     .font(.body.monospaced())
                     .frame(minWidth: 220)
                 Button("Choose…", action: choose)
                 Button("Use This Folder", action: use)
-                    .disabled(path.trimmingCharacters(in: .whitespaces).isEmpty
-                              || (KBConfig.rootURL(for: path) == model.rootURL && model.hasKnowledgeBaseFolder))
+                    .disabled(path.trimmingCharacters(in: .whitespaces).isEmpty || !typed.usable || isCurrent)
             }
-            RequirementRow(ok: model.hasKnowledgeBaseFolder, title: KBConfig.abbreviateTilde(model.rootURL.path),
-                           detail: !model.hasKnowledgeBaseFolder ? "Not created yet. Use This Folder creates it."
-                               : model.hasKnowledgeBase ? "Knowledge base found." : "Empty. Add your first project to start it.") {
-                EmptyView()
+            if isCurrent {
+                RequirementRow(ok: true, title: KBConfig.abbreviateTilde(model.rootURL.path), detail: "Your knowledge base.") { EmptyView() }
+            } else if !path.trimmingCharacters(in: .whitespaces).isEmpty {
+                Label(typed.message, systemImage: typed.usable ? "checkmark.circle" : "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(typed.usable ? Color.secondary : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if model.hasKnowledgeBaseFolder {
+            if model.hasKnowledgeBase {
                 Text("Projects").font(.headline).padding(.top, 6)
                 if model.index.projects.isEmpty {
-                    Text("A project is one product or codebase. Add one with its repository folders; Mindmill keeps its knowledge apart from the others.")
+                    Text("A project is one product or codebase, such as an app and its repository folders. Mindmill keeps each project's knowledge apart.")
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 } else {
                     ChipRow(alignment: .top) {
@@ -397,9 +421,14 @@ private struct KnowledgeBaseStep: View {
                     }
                 }
                 Button { model.addProjectRequest = AddProjectRequest() } label: { Label("Add a Project…", systemImage: "plus") }
+                if model.index.projects.isEmpty {
+                    Label("Add at least one project to continue.", systemImage: "arrow.turn.down.right")
+                        .font(.callout.weight(.medium)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .onAppear { path = model.rootPath }
+        .onAppear { path = model.hasKnowledgeBase ? model.rootPath : KnowledgeBaseFolder.suggestedPath }
     }
 
     private func choose() {
@@ -407,16 +436,21 @@ private struct KnowledgeBaseStep: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
+        panel.message = "Choose a new or empty folder for Mindmill's knowledge base, not a project's folder."
         panel.prompt = "Use This Folder"
         if panel.runModal() == .OK, let url = panel.url { path = KBConfig.abbreviateTilde(url.path) }
     }
 
+    /// Makes the folder and starts a knowledge base in it, unless it has one already.
     private func use() {
         let url = KBConfig.rootURL(for: path)
+        let state = KnowledgeBaseFolder.check(url)
+        guard state.usable else { return }
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            if state != .knowledgeBase { try Registry.createKnowledgeBase(root: url) }
         } catch {
-            model.errorMessage = "Could not create \(url.path): \(error.localizedDescription)"
+            model.errorMessage = "Could not start a knowledge base in \(url.path): \(error.localizedDescription)"
             return
         }
         model.changeRoot(to: path)
@@ -431,6 +465,8 @@ struct ToolsPicker: View {
     @Binding var tools: Set<String>
     @Binding var servers: [ClaudeConnectors.Server]
     @Binding var loaded: Bool
+    /// The first-run setup picks the calendar here; Settings has its own picker.
+    var calendar: Binding<CalendarSource>?
     @State private var loading = false
 
     private var otherTools: [ClaudeConnectors.Service] {
@@ -457,6 +493,18 @@ struct ToolsPicker: View {
                 }
             }
 
+            if let calendar {
+                Text("Which calendar should Mindmill read?").font(.headline).padding(.top, 4)
+                Text("Optional. Mindmill mirrors its meetings so you can prepare them and take notes; without one you add meetings yourself.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(calendarChoices(calendar.wrappedValue)) { c in
+                    choiceRow(selected: calendar.wrappedValue.id == c.id, title: c.title, note: c.note,
+                              status: c.isSet ? c.server(in: servers)?.status : nil) {
+                        calendar.wrappedValue = c
+                    }
+                }
+            }
+
             Text("Anything else?").font(.headline).padding(.top, 4)
             ForEach(otherTools) { s in
                 choiceRow(selected: tools.contains(s.id), title: s.title, note: s.note, status: status(of: s.id)) {
@@ -465,6 +513,11 @@ struct ToolsPicker: View {
             }
         }
         .onAppear { if !loaded { refresh() } }
+    }
+
+    private func calendarChoices(_ current: CalendarSource) -> [CalendarSource] {
+        let choices = CalendarSource.choices(servers: servers)
+        return choices.contains(current) ? choices : choices + [current]
     }
 
     private func status(of serviceID: String) -> ClaudeConnectors.Server.Status? {

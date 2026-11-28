@@ -174,7 +174,7 @@ extension AppModel {
 
     /// Brings the main window forward on a screen; used by `app.show`.
     func show(screen: String, id: String?) throws {
-        NSApp.activate(ignoringOtherApps: true)
+        BackgroundMode.comeForward()
         func front() {
             if let w = NSApp.windows.first(where: { $0.title.hasPrefix("Mindmill") }) { w.makeKeyAndOrderFront(nil) }
             else { openWindowAction?("main", nil) }

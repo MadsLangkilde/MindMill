@@ -192,7 +192,9 @@ struct TodayView: View {
             if meetings.isEmpty && !query.isEmpty {
                 Text("No meetings match “\(query)”.").font(.callout).foregroundStyle(.secondary)
             } else if meetings.isEmpty {
-                Text(model.calendar.isRunning ? "Syncing the calendar…" : "No meetings. New meetings in your calendar appear here.")
+                Text(model.calendar.isRunning ? "Syncing the calendar…"
+                     : model.calendarSource.isSet ? "No meetings. New meetings in \(model.calendarSource.title) appear here."
+                     : "No meetings. Connect a calendar in Settings → Connections to have them appear here, or add one yourself.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -376,7 +378,7 @@ struct RefLink: View {
         if let u = URL(string: ref), ["http", "https"].contains(u.scheme ?? "") { return u }
         if ref.hasPrefix("ado:"), let n = Int(ref.dropFirst(4)) {
             // The open scope's tracker, else the first scope that has Azure DevOps set up.
-            let trackers = ([model.project].compactMap { $0 } + model.index.projects).map { model.settings(for: $0.id).tracker }
+            let trackers = ([model.project].compactMap { $0 } + model.index.projects).map { model.tracker(for: $0.id) }
             guard let t = trackers.first(where: { $0.kind == "azure-devops" && !$0.organization.isEmpty && !$0.project.isEmpty }) else { return nil }
             let org = t.organization, proj = t.project
             return URL(string: "https://dev.azure.com/\(org)/\(proj.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? proj)/_workitems/edit/\(n)")

@@ -122,19 +122,26 @@ extension ClaudeConnectors {
     public struct Problem: Equatable, Sendable, Identifiable {
         public var service: Service
         public var server: Server
+        /// Claude doesn't list the server at all.
+        public var missing: Bool
         public var id: String { server.name }
 
-        public init(service: Service, server: Server) {
+        public init(service: Service, server: Server, missing: Bool = false) {
             self.service = service
             self.server = server
+            self.missing = missing
         }
 
         public var headline: String {
-            server.status == .needsAuth ? "\(service.title) needs signing in" : "\(service.title) isn't working"
+            missing ? "\(service.title) isn't connected to Claude"
+                : server.status == .needsAuth ? "\(service.title) needs signing in" : "\(service.title) isn't working"
         }
 
         /// Why it happens and the fix, in a sentence or two.
         public var advice: String {
+            if missing {
+                return "Add it at claude.ai → Settings → Connectors, or choose another calendar, or none, in Settings → Connections."
+            }
             switch (server.status, server.fromClaudeAI) {
             case (.needsAuth, true):
                 return "Its sign-in expired or was revoked, which a password change does. Reconnect it at claude.ai → Settings → Connectors, sign in, then come back here."

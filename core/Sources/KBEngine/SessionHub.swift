@@ -80,7 +80,7 @@ public final class SessionHub {
     /// Sessions the platform's notifier was told about while they wait on the user.
     @ObservationIgnored var waitingNotified: Set<String> = []
     /// Where the sessions are saved; tests point it elsewhere.
-    @ObservationIgnored public var storeURL = AppPaths.file("sessions.json")
+    @ObservationIgnored public var storeURL = AppPaths.instanceFile("sessions.json")
     @ObservationIgnored public var crewDirectory: URL = CrewDir.url()
 
     init(engine: MindmillEngine) {

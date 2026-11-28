@@ -8,6 +8,8 @@ public struct CalendarSyncState: Equatable, Sendable {
     public var lastSuccess: Date?
     public var summary: String?
     public var error: String?
+    /// The last sync failed because the calendar's connector needs signing in, or isn't there.
+    public var signInNeeded = false
     public var inFlight = false
     /// The days the running sync covers.
     public var range: (from: String, to: String)?
@@ -21,7 +23,7 @@ public struct CalendarSyncState: Equatable, Sendable {
 
     public static func == (a: Self, b: Self) -> Bool {
         a.lastRun == b.lastRun && a.lastSuccess == b.lastSuccess && a.summary == b.summary && a.error == b.error
-            && a.inFlight == b.inFlight && a.range?.from == b.range?.from && a.range?.to == b.range?.to
+            && a.signInNeeded == b.signInNeeded && a.inFlight == b.inFlight && a.range?.from == b.range?.from && a.range?.to == b.range?.to
             && a.queued?.from == b.queued?.from && a.queued?.to == b.queued?.to
     }
 }
@@ -35,8 +37,9 @@ public struct EmailSyncState: Equatable, Sendable {
     public init() {}
 }
 
-/// `engine.routines`: the headless Claude runs with the Microsoft 365 connector: the calendar sync (Outlook events
-/// as meeting files), the email scan (reminders from new mail) and the morning routine (the day's plan).
+/// `engine.routines`: the headless Claude runs that reach the user's tools through Claude's connectors: the calendar
+/// sync (the chosen calendar's events as meeting files), the email scan (reminders from new Outlook mail) and the
+/// morning routine (the day's plan).
 @MainActor
 @Observable
 public final class RoutineCenter {
@@ -57,6 +60,9 @@ public final class RoutineCenter {
     @ObservationIgnored public var afterCalendar: (() -> Void)?
     /// Whether the connector needs signing in again, for what `kb sync calendar` tells a session.
     @ObservationIgnored public var needsSignIn: () -> Bool = { false }
+    @ObservationIgnored private var resolvingSource = false
+
+    public static let noCalendar = "No calendar is connected to Mindmill. Choose one in Settings → Connections."
 
     @ObservationIgnored unowned let engine: MindmillEngine
 
@@ -66,10 +72,16 @@ public final class RoutineCenter {
 
     // MARK: Calendar
 
-    /// Mirrors Outlook events as meeting files: by default today through two weeks on; `from`/`to` for a week the
-    /// user opens in the meetings calendar. False when it couldn't start (and isn't queued).
+    /// Mirrors the chosen calendar's events as meeting files: by default today through two weeks on; `from`/`to` for a
+    /// week the user opens in the meetings calendar. False when it couldn't start (and isn't queued), as when no
+    /// calendar is connected.
     @discardableResult
     public func syncCalendar(from requestedFrom: String? = nil, to requestedTo: String? = nil) -> Bool {
+        let source = engine.calendarChoice
+        guard source.isSet else {
+            if engine.calendarSource == nil { resolveThenSync(from: requestedFrom, to: requestedTo) }
+            return false
+        }
         if let requestedFrom, let requestedTo, calendar.isRunning || morning.isBusy {
             calendarSync.queued = (requestedFrom, requestedTo)
             return true
@@ -77,9 +89,9 @@ public final class RoutineCenter {
         guard !calendar.isRunning, !morning.isBusy else { return false }
         let from = requestedFrom ?? KBDate.today()
         let to = requestedTo ?? KBDate.today(Calendar(identifier: .gregorian).date(byAdding: .day, value: Self.calendarDaysAhead, to: Date()) ?? Date())
-        guard let launch = engine.launch(prompt: ClaudeModes.calendar(from: from, to: to), sessionID: UUID().uuidString.lowercased(),
+        guard let launch = engine.launch(prompt: ClaudeModes.calendar(from: from, to: to, source: source), sessionID: UUID().uuidString.lowercased(),
                                          resume: false, model: engine.model(for: .calendar), cwd: engine.rootURL,
-                                         tools: ["Bash(kb:*)", "Bash(python3:*)"] + UserTools.readTools(.calendar)) else { return false }
+                                         tools: ["Bash(kb:*)", "Bash(python3:*)"] + source.tools) else { return false }
         calendar.onEvent = { [weak self] event in self?.calendarEvent(event) }
         do {
             try calendar.start(launch, mode: "calendar")
@@ -103,10 +115,12 @@ public final class RoutineCenter {
             if !isError, line.hasPrefix("calendar:") {
                 calendarSync.summary = line
                 calendarSync.error = nil
+                calendarSync.signInNeeded = false
                 calendarSync.lastSuccess = Date()
                 onCalendarSynced?()
             } else {
                 calendarSync.error = line.hasPrefix("ERROR") ? String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces) : (line.isEmpty ? "Calendar sync failed." : line)
+                calendarSync.signInNeeded = ConnectorSignIn.isNeeded(text)
                 onConnectorTrouble?(text)
             }
             calendarSync.finished += 1
@@ -127,6 +141,18 @@ public final class RoutineCenter {
             syncQueuedWeek()
         default:
             break
+        }
+    }
+
+    /// No choice saved yet: settle it from Claude's connectors once, then sync if that kept a calendar.
+    private func resolveThenSync(from: String?, to: String?) {
+        guard !resolvingSource else { return }
+        resolvingSource = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let source = await engine.resolveCalendarSource()
+            resolvingSource = false
+            if source.isSet { syncCalendar(from: from, to: to) }
         }
     }
 
@@ -196,8 +222,11 @@ public final class RoutineCenter {
     public func runMorning(date: String = KBDate.today()) -> Bool {
         engine.sprints.check(force: true)
         let synced = calendarSync.lastSuccess.map { Calendar.current.isDateInToday($0) } ?? false
-        guard let launch = engine.launch(prompt: ClaudeModes.morning(date, calendarSynced: synced), sessionID: UUID().uuidString.lowercased(),
-                                         resume: false, model: engine.model(for: .work), cwd: engine.rootURL) else {
+        let source = engine.calendarChoice
+        let tools = ClaudeLaunch.bridgeTools + source.tools.filter { !ClaudeLaunch.bridgeTools.contains($0) }
+        guard let launch = engine.launch(prompt: ClaudeModes.morning(date, calendarSynced: synced, calendar: source),
+                                         sessionID: UUID().uuidString.lowercased(), resume: false, model: engine.model(for: .work),
+                                         cwd: engine.rootURL, tools: tools) else {
             engine.report(engine.claudeMissingExplanation, error: true)
             return false
         }
@@ -220,6 +249,7 @@ public final class RoutineCenter {
     public func sync(_ what: String, range: (from: String, to: String)?) async -> (Bool, String) {
         switch what {
         case "calendar":
+            guard await engine.resolveCalendarSource().isSet else { return (false, Self.noCalendar) }
             let before = calendarSync.finished
             syncCalendar(from: range?.from, to: range?.to)
             guard calendar.isRunning || calendarSync.queued != nil else {
@@ -233,7 +263,7 @@ public final class RoutineCenter {
             guard done else { return (false, "still syncing; the meeting files update when it finishes") }
             if let e = calendarSync.error {
                 return (false, needsSignIn()
-                    ? "Microsoft 365 needs signing in again. Ask the user to press Sign In… on the banner in the Mindmill app (\(e))"
+                    ? "\(engine.calendarChoice.title) needs signing in again. Ask the user to press Reconnect… on the banner in the Mindmill app (\(e))"
                     : e)
             }
             return (true, calendarSync.summary ?? "synced")
@@ -264,5 +294,27 @@ public final class RoutineCenter {
 
     static func firstLine(_ text: String) -> String {
         text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+    }
+}
+
+extension MindmillEngine {
+    /// The chosen calendar, none until there is one.
+    public var calendarChoice: CalendarSource { calendarSource ?? .none }
+
+    /// With no choice saved, settles it from Claude's connectors (`CalendarSource.adopted`). A host that lists them
+    /// anyway passes what it found.
+    public func adoptCalendarSource(from servers: [ClaudeConnectors.Server]) {
+        guard calendarSource == nil else { return }
+        calendarSource = CalendarSource.adopted(from: servers)
+    }
+
+    /// The chosen calendar, listing Claude's connectors once to settle it when no choice is saved yet.
+    public func resolveCalendarSource() async -> CalendarSource {
+        if let calendarSource { return calendarSource }
+        guard let exe = claudeExecutable else { return .none }
+        let r = await ProcessRunner().run(executable: exe, arguments: ["mcp", "list"], environment: claudeEnvironment(),
+                                          stdin: nil, currentDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        if r.status == 0 { adoptCalendarSource(from: ClaudeConnectors.parse(r.stdout)) }
+        return calendarChoice
     }
 }

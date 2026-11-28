@@ -46,6 +46,26 @@ public struct ProjectSettings: Equatable, Sendable {
         KBLayout.of(root: root).privateDir(project).appendingPathComponent("settings.json")
     }
 
+    /// Has a tracker of its own. A scope without one works in its project's Overview tracker (`trackerScope`).
+    public var ownsTracker: Bool { hasTracker && !["", "none"].contains(tracker.kind) }
+
+    /// The scope whose tracker and board `scope` works in: its own when it has a tracker, else its project's Overview
+    /// (the wide scope) when that has one, so a project keeps one board.
+    public static func trackerScope(_ scope: String, root: URL) -> String {
+        guard !load(project: scope, root: root).ownsTracker,
+              let projects = try? KBIndex.parseRegistry(at: KBLayout.home(root: root).appendingPathComponent("kb.json")).0,
+              let me = projects.first(where: { $0.id == scope }), !me.wide,
+              let wide = projects.first(where: { $0.group == me.group && $0.wide && $0.id != scope }),
+              load(project: wide.id, root: root).ownsTracker
+        else { return scope }
+        return wide.id
+    }
+
+    /// The tracker `scope` works in: its own, else its project's Overview's (`trackerScope`).
+    public static func tracker(scope: String, root: URL) -> Tracker {
+        load(project: trackerScope(scope, root: root), root: root).tracker
+    }
+
     public static func load(project: String, root: URL) -> ProjectSettings {
         guard let data = try? Data(contentsOf: url(project: project, root: root)) else { return ProjectSettings() }
         return parse(data)

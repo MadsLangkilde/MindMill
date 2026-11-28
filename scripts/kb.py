@@ -2985,6 +2985,28 @@ def cmd_tools(a) -> int:
     return 0
 
 
+def owns_tracker(settings: dict) -> bool:
+    return str((settings.get("tracker") or {}).get("kind") or "none") != "none"
+
+
+def tracker_scope(root: Path, sid: str) -> str:
+    """The scope whose tracker and board `sid` works in: its own when it has a tracker, else its project's Overview
+    (the wide scope) when that has one, so a project keeps one board."""
+    if not sid or owns_tracker(load_settings(root, sid)):
+        return sid
+    known = scope_map(root)
+    me = known.get(sid)
+    if not me or me.get("wide"):
+        return sid
+    wide = next((x for x in known.values() if x["project"] == me["project"] and x.get("wide") and x["id"] != sid), None)
+    return wide["id"] if wide and owns_tracker(load_settings(root, wide["id"])) else sid
+
+
+def scope_tracker(root: Path, sid: str) -> dict:
+    """The tracker `sid` works in: its own, else its project's Overview's (`tracker_scope`)."""
+    return load_settings(root, tracker_scope(root, sid)).get("tracker") or {}
+
+
 def cmd_settings(a) -> int:
     root = kb_root()
     pid = a.project or current_project_id(root)
@@ -4000,7 +4022,7 @@ def in_progress_state(current: str, states: list[dict]) -> str | None:
 
 def start_work_item(root: Path, sid: str, iid: int) -> str:
     """Moves a PBI or bug into its tracker's in-progress state when nobody has started it yet."""
-    tracker = load_settings(root, sid).get("tracker") or {}
+    tracker = scope_tracker(root, sid)
     kind = tracker.get("kind")
     if kind == "local":
         data = load_work(root, sid)
@@ -4047,7 +4069,7 @@ def resolved_state(current: str, states: list[dict]) -> str | None:
 
 def resolve_work_item(root: Path, sid: str, iid: int) -> str:
     """Moves a PBI or bug to its resolved (or done) state, for work that turned out finished."""
-    tracker = load_settings(root, sid).get("tracker") or {}
+    tracker = scope_tracker(root, sid)
     kind = tracker.get("kind")
     if kind == "local":
         data = load_work(root, sid)
@@ -4283,7 +4305,7 @@ def cmd_research(a) -> int:
 
 def ado_tracker_for(root: Path, sid: str | None) -> tuple[str, str]:
     """The organization and project of a scope's Azure DevOps tracker, else of the first one set up."""
-    t = load_settings(root, sid).get("tracker") or {} if sid else {}
+    t = scope_tracker(root, sid) if sid else {}
     if t.get("kind") == "azure-devops" and t.get("organization") and t.get("project"):
         return t["organization"], t["project"]
     found = list(ado_trackers(root).keys())
@@ -4302,7 +4324,7 @@ def tracker_note(root: Path, sid: str | None, iid: int, text: str, heading: str,
         sys.exit("kb: the note still names KB entries or local paths: " + ", ".join(left))
     if not text:
         sys.exit("kb: nothing to add")
-    kind = (load_settings(root, sid).get("tracker") or {}).get("kind") if sid else None
+    kind = scope_tracker(root, sid).get("kind") if sid else None
     if kind == "jira":
         sys.exit(f"kb: {sid} tracks work in Jira; use Claude's Jira connector")
     if kind == "local":
@@ -4340,7 +4362,7 @@ def tracker_find(root: Path, sid: str, query: str, limit: int = 10) -> dict:
     """Work items of the scope's tracker whose id is the query or whose title has every word of it, for picking a
     parent or related item: open ones first, then the most recently changed. Tasks and removed items are left out."""
     q = query.strip().lstrip("#!").strip()
-    tracker = load_settings(root, sid).get("tracker") or {}
+    tracker = scope_tracker(root, sid)
     kind = tracker.get("kind") or ""
     words = [w for w in q.split() if w.strip("#!")]
     if not q:
@@ -4386,7 +4408,7 @@ def tracker_local_scope(root: Path, a) -> str | None:
     if a.action not in LOCAL_TRACKER_ACTIONS:
         return None
     sid = getattr(a, "project", None) or (resolve_project(load_registry(root), Path(os.getcwd())) or {}).get("id")
-    if not sid or (load_settings(root, sid).get("tracker") or {}).get("kind") != "local":
+    if not sid or scope_tracker(root, sid).get("kind") != "local":
         return None
     return sid
 
@@ -4538,12 +4560,12 @@ def cmd_tracker(a) -> int:
     if a.action == "move":
         path = a.sprint
         if a.backlog:
-            t = load_settings(root, a.project or current_project_id(root)).get("tracker") or {}
+            t = scope_tracker(root, a.project or current_project_id(root))
             if t.get("kind") != "azure-devops" or ado_tracker_missing(t):
                 sys.exit("kb: that scope has no azure-devops tracker")
             path = ado_backlog_iteration(t)
         elif path in ("current", "next"):
-            t = load_settings(root, a.project or current_project_id(root)).get("tracker") or {}
+            t = scope_tracker(root, a.project or current_project_id(root))
             path = ado_sprint(t, ado_pat(), path)
             if not path:
                 sys.exit("kb: that scope's tracker has no tracker.iteration_root to find sprints under")
@@ -4552,7 +4574,7 @@ def cmd_tracker(a) -> int:
             print(line)
         return 0
     pid = a.project or current_project_id(root)
-    tracker = load_settings(root, pid).get("tracker") or {}
+    tracker = scope_tracker(root, pid)
     if a.action == "show":
         print(json.dumps(tracker, indent=2, ensure_ascii=False))
         return 0 if tracker else 1
@@ -4681,7 +4703,8 @@ class WorkError(ValueError):
 
 
 def work_path(root: Path, sid: str) -> Path:
-    return private_dir(root, sid) / "work.json"
+    """The board `sid` works in: its own, or its project's Overview's when it has no tracker of its own."""
+    return private_dir(root, tracker_scope(root, sid)) / "work.json"
 
 
 def empty_work() -> dict:
@@ -5009,7 +5032,7 @@ def local_backlog(data: dict, sid: str, done_days: int = 14, sprint: str | None 
 
 def tracker_elsewhere(root: Path, sid: str) -> str | None:
     """Why `kb tracker` can't act for this scope: its work is in Jira or in Mindmill's own tracker."""
-    kind = (load_settings(root, sid).get("tracker") or {}).get("kind")
+    kind = scope_tracker(root, sid).get("kind")
     if kind == "jira":
         return f"kb: {sid} tracks work in Jira; use Claude's Jira connector"
     if kind == "local":
@@ -5176,15 +5199,15 @@ def sprint_neighbours(sprints: list[dict], today: str) -> dict:
 
 def sprint_trackers(root: Path) -> list[dict]:
     """Every tracker the scopes use, once: Azure DevOps by organization, project and iteration root (scopes sharing
-    them share sprints), any other kind per scope."""
+    them share sprints), any other kind per scope that holds it, with the scopes that use its Overview's."""
     groups: dict[str, dict] = {}
     for sc in load_registry(root):
-        t = load_settings(root, sc["id"]).get("tracker") or {}
+        t = scope_tracker(root, sc["id"])
         kind = str(t.get("kind") or "none")
         if kind == "none" or (kind == "azure-devops" and ado_tracker_missing(t)):
             continue
         key = (f"azure-devops:{t['organization']}/{t['project']}:{t.get('iteration_root') or ''}"
-               if kind == "azure-devops" else f"{kind}:{sc['id']}")
+               if kind == "azure-devops" else f"{kind}:{tracker_scope(root, sc['id'])}")
         groups.setdefault(key, {"key": key, "kind": kind, "scopes": [], "tracker": t})["scopes"].append(sc["id"])
     return list(groups.values())
 
@@ -5632,13 +5655,14 @@ def prefixed_title(prefix: str, title: str) -> str:
 def backlog_create(root: Path, e: Entry, a) -> int:
     if e.status != "proposed":
         sys.exit(f"kb: {e.id} is {e.status}, not proposed")
-    tracker = load_settings(root, e.project).get("tracker") or {}
+    tracker = scope_tracker(root, e.project)
     if tracker.get("kind") == "local":
         return backlog_create_local(root, e, a)
     if why := tracker_elsewhere(root, e.project):
         sys.exit(why)
     if tracker.get("kind") != "azure-devops":
-        sys.exit(f"kb: project {e.project} has no azure-devops tracker in settings.json")
+        sys.exit(f"kb: {e.project} has no tracker set up. Choose one in the Mindmill app (Project Settings → Tracker), "
+                 f"or set it on its project's Overview to use one board for the whole project.")
     missing = ado_tracker_missing(tracker)
     if missing:
         sys.exit(f"kb: the {e.project} tracker has no {' or '.join(missing)} set. Fill in its Tracker settings "
@@ -6016,7 +6040,7 @@ def link_target(root: Path, raw: str, scope: str | None) -> dict:
         wi = str(entry.get("work_item") or "")
         number = int(wi) if wi.isdigit() and entry.status == "created" else None
     sid = scope or (entry.project if entry else None)
-    tracker = (load_settings(root, sid).get("tracker") or {}) if sid else {}
+    tracker = scope_tracker(root, sid) if sid else {}
     kind = tracker.get("kind") or ("azure-devops" if not sid else "")
     if number and kind == "jira":
         sys.exit(f"kb: {sid} tracks work in Jira; link it with Claude's Jira connector")
@@ -6145,7 +6169,7 @@ def backlog_drop(root: Path, e: Entry, a) -> int:
         print("dry run: pass --yes to drop it", file=sys.stderr)
         return 2
     if a.comment:
-        tracker = load_settings(root, e.project).get("tracker") or {}
+        tracker = scope_tracker(root, e.project)
         print(tracker_note(root, e.project, number, notes, heading, tracker.get("kind") != "local"))
     e.set("status", "rejected")
     e.set("duplicate_of", of)
@@ -6347,7 +6371,7 @@ def backlog_duplicates(root: Path, scope: str | None = None, only: list[str] | N
     by_tracker: dict[tuple[str, str], list[dict]] = {}
     local_scopes = set()
     for p in proposals:
-        t = load_settings(root, p["scope"]).get("tracker") or {}
+        t = scope_tracker(root, p["scope"])
         if t.get("kind") == "azure-devops" and t.get("organization") and t.get("project"):
             by_tracker.setdefault((t["organization"], t["project"]), []).append(p)
         elif t.get("kind") == "local":

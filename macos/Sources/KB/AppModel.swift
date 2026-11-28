@@ -73,6 +73,14 @@ final class AppModel {
     var newEntryRequest: NewEntryRequest?
     var deleteRequest: DeleteRequest?
     var errorMessage: String?
+    /// The instances in kb's config; `instance` is the open one.
+    var instances = InstanceList(instances: [MindmillInstance(id: MindmillInstance.mainID, name: "Main", root: KBConfig.defaultRootPath)],
+                                 current: MindmillInstance.mainID)
+    /// Asked for at quit: Mindmill opens again on it (`relaunchIfSwitching`).
+    @ObservationIgnored var pendingInstance: MindmillInstance?
+    @ObservationIgnored var relaunchInBackground = false
+    /// Why a background switch (login item, launcher) isn't in place, for Settings.
+    var backgroundProblem: String?
     var notice: String?
 
     /// Bumped on every reload, so views holding their own state can refresh from disk.
@@ -139,8 +147,8 @@ final class AppModel {
         get { engine.routines.calendarSync }
         set { engine.routines.calendarSync = newValue }
     }
-    /// The claude.ai Microsoft 365 connector's status from the latest Claude session (`connected`, `needs-auth`, …).
-    var microsoft365Status = ""
+    /// The chosen calendar's connector status from the latest Claude session (`connected`, `needs-auth`, …).
+    var calendarStatus = ""
     /// The servers `claude mcp list` showed last, and when.
     var connectorServers: [ClaudeConnectors.Server] = []
     var connectorsChecked: Date?
@@ -383,7 +391,18 @@ final class AppModel {
             UserDefaults.standard.set(launch.rawValue, forKey: "appMode")
         }
         let start = MindmillEngine.startRoot()
+        let list = InstanceList.load()
+        let open = start.override ? list.instance(root: KBConfig.rootURL(for: start.path)) : list.open
+        if !start.override, !list.isRecorded() { try? list.save() }
+        if let open, open.id != MindmillInstance.mainID {
+            let folder = open.dataFolder(in: AppPaths.data)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            AppPaths.instanceFolder = folder
+        }
         engine = MindmillEngine(rootPath: start.path, rootOverride: start.override, platform: MacPlatform.make())
+        engine.instance = open
+        instances = list
+        engine.onSwitchInstance = { [weak self] in self?.switchInstance(to: $0, askFirst: false) }
         engine.platform.presenter = self
         engine.platform.actionEndpoint = actionServer
         engine.myNames = { [weak self] in self?.myNames ?? [] }
@@ -400,6 +419,7 @@ final class AppModel {
         registerActions()
         actionServer.start()
         startRemoteIfEnabled()
+        syncBackgroundAgents()
         loadFactLinkRejected()
     }
 
@@ -496,11 +516,20 @@ final class AppModel {
         engine.startWatching()
     }
 
+    /// Points the open instance at another folder; another instance's folder switches to that instance instead.
     func changeRoot(to path: String) {
         let trimmed = path.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        if let other = engine.instanceList().instance(root: KBConfig.rootURL(for: trimmed)), other.id != instance.id {
+            switchInstance(to: other)
+            return
+        }
         do {
             try KBConfig.saveRootPath(trimmed)
+            let list = InstanceList.load(configURL: engine.configURL)
+            try list.save(configURL: engine.configURL)
+            engine.instance = list.open
+            instances = list
         } catch {
             errorMessage = "Could not write \(KBConfig.defaultConfigURL.path): \(error.localizedDescription)"
             return

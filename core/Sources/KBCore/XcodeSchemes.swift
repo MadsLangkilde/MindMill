@@ -28,7 +28,13 @@ public enum XcodeSchemes {
         if let i = lines.firstIndex(of: "* What went wrong:"), i + 1 < lines.count, !lines[i + 1].isEmpty {
             return String(lines[i + 1].prefix(240))
         }
-        guard let line = lines.first(where: { $0.hasPrefix("error:") || $0.contains(": error:") || $0.hasPrefix("xcodebuild: error:") }) else { return nil }
+        func shellError(_ l: String) -> Bool { l.contains("command not found") || l.contains("no such file or directory: ") }
+        guard let line = lines.first(where: { $0.hasPrefix("error:") || $0.contains(": error:") || shellError($0) }) else { return nil }
+        if shellError(line) {
+            // `zsh:1: command not found: gradle` → `command not found: gradle`
+            let text = line.range(of: #"^(zsh|bash|sh)(:[0-9]+)?: "#, options: .regularExpression).map { String(line[$0.upperBound...]) } ?? line
+            return String(text.prefix(240))
+        }
         let text = line.range(of: "error:").map { String(line[$0.upperBound...]) } ?? line
         return String(text.trimmingCharacters(in: .whitespaces).prefix(240))
     }

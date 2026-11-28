@@ -32,7 +32,7 @@ public final class TestCenter {
     @ObservationIgnored public var lastAutoDelivery: [String: Date] = [:]
 
     nonisolated public static var folder: URL {
-        AppPaths.file("deliveries")
+        AppPaths.instanceFile("deliveries")
     }
 
     nonisolated public static var historyURL: URL { folder.appendingPathComponent("history.json") }
@@ -69,6 +69,10 @@ public final class TestCenter {
     /// A delivery's saved output, when it has one.
     public func log(_ deliveryID: String) -> String? {
         try? String(contentsOf: root.appendingPathComponent(deliveryID).appendingPathComponent(Self.logFile), encoding: .utf8)
+    }
+
+    public func hasLog(_ deliveryID: String) -> Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent(deliveryID).appendingPathComponent(Self.logFile).path)
     }
 
     public func folder(_ id: String) -> URL {

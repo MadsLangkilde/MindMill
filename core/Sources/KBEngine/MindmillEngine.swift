@@ -101,9 +101,16 @@ public final class MindmillEngine {
             if AssistantSkills.providers(aiSetup) != AssistantSkills.providers(oldValue) { placeSkills() }
         }
     }
+    /// The calendar the calendar sync mirrors (Settings → Connections), saved in the platform's preferences; nil until
+    /// the user chooses or `adoptCalendarSource` settles it.
+    public var calendarSource: CalendarSource? {
+        didSet { calendarSource?.save(defaults: platform.defaults) }
+    }
     /// Spoken conversations by id, and the realtime relays of those on an API engine.
     public var voiceConversations: [String: VoiceConversation] = [:]
     @ObservationIgnored public var realtimeRelays: [String: RealtimeRelay] = [:]
+    /// Voice API key reads still waiting on the secret store, per provider (`readVoiceKey`).
+    @ObservationIgnored var voiceKeyReads: [String: Task<String?, Never>] = [:]
     /// Binary frames the engine doesn't handle itself (meeting screenshots and audio), for the host.
     @ObservationIgnored public var onBinaryFrame: ((RemoteFrame, RemoteClient) -> Void)?
     /// A client's connection closed, after the engine ended its voice conversations.
@@ -156,6 +163,14 @@ public final class MindmillEngine {
     }
     /// Something to tell the user (`report`): the host's notice bar or error alert.
     @ObservationIgnored public var onReport: ((String, Bool) -> Void)?
+    /// The instance this engine has open; nil before the host says.
+    @ObservationIgnored public var instance: MindmillInstance?
+    /// kb's config, where the instances are listed.
+    @ObservationIgnored public var configURL = KBConfig.defaultConfigURL
+    /// Opens another instance (the Mac restarts on it); nil where the host can't, and the phone is told so.
+    @ObservationIgnored public var onSwitchInstance: ((MindmillInstance) -> Void)?
+    /// The launcher's port while a paired phone may start this computer's Mindmill, sent in `hello`.
+    @ObservationIgnored public var launcherPort: Int?
     /// What Build sessions and factory sessions are told about this machine's testing for a scope.
     @ObservationIgnored public lazy var testingNote: (String?) -> String = { [unowned self] scope in tests.sessionNote(scope) }
     /// `kb sync` of what only the host can sync (calendar, email): ok and a line, or nil when it can't.
@@ -185,7 +200,7 @@ public final class MindmillEngine {
     @ObservationIgnored var dataFolder: URL?
 
     /// A file in the engine's data folder (the isolated one in tests and a second engine).
-    public func dataFile(_ name: String) -> URL { (dataFolder ?? AppPaths.data).appendingPathComponent(name) }
+    public func dataFile(_ name: String) -> URL { (dataFolder ?? AppPaths.instanceData).appendingPathComponent(name) }
 
     @ObservationIgnored var lastNeedsYou = ""
     @ObservationIgnored private var watcher: FileWatching?
@@ -198,6 +213,7 @@ public final class MindmillEngine {
         self.rootOverride = rootOverride
         self.platform = platform
         self.aiSetup = AISetup.migrated(defaults: platform.defaults)
+        self.calendarSource = CalendarSource.load(defaults: platform.defaults)
         self.actions = ActionLayer()
         self.remote = RemoteServer(transport: platform.transport, folder: remoteFolder, defaults: platform.defaults)
         actions.unavailable = { [name = platform.name] action in "\(action) isn't available on \(name) yet." }
@@ -215,6 +231,7 @@ public final class MindmillEngine {
         registerActions()
         registerBuildMethods()
         registerProjectMethods()
+        registerInstanceMethods()
         TestRunner.register(on: self)
         registerBuildActions()
         registerSprintActions()
@@ -243,12 +260,20 @@ public final class MindmillEngine {
     public var cli: KBCLI {
         KBCLI(pluginRoot: URL(fileURLWithPath: KBConfig.expandTilde(pluginRootPath)), kbRoot: rootURL,
               python: shell?.python3 ?? URL(fileURLWithPath: "/usr/bin/python3"), pythonArguments: shell?.python3Arguments ?? [],
-              environment: withMe(shell?.environment ?? ProcessInfo.processInfo.environment))
+              environment: withDataFolders(withMe(shell?.environment ?? ProcessInfo.processInfo.environment)))
     }
 
     public func claudeEnvironment() -> [String: String] {
-        var env = withMe(shell?.environment ?? ProcessInfo.processInfo.environment)
+        var env = withDataFolders(withMe(shell?.environment ?? ProcessInfo.processInfo.environment))
         env["KB_ROOT"] = rootURL.path
+        return env
+    }
+
+    /// The open instance's crew and scans folders, which `kb` would otherwise look for in the data folder itself.
+    private func withDataFolders(_ env: [String: String]) -> [String: String] {
+        var env = env
+        env["KB_CREW_DIR"] = sessions.crewDirectory.path
+        env["KB_SCANS_DIR"] = scans.directory.path
         return env
     }
 

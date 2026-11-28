@@ -14,7 +14,7 @@ struct ScopeTagState: Equatable {
 
 extension AppModel {
     private var scopeTagURL: URL {
-        AppPaths.file("scopetags.json")
+        AppPaths.instanceFile("scopetags.json")
     }
 
     /// The text that decides an entry's scopes; its own `scopes` field is left out so tagging doesn't retrigger.

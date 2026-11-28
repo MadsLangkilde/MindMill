@@ -43,6 +43,8 @@ struct ProjectsSheet: View {
     @State private var saving = false
     @State private var error: String?
     @State private var confirmCancel = false
+    /// A new project's instance by its key, when it isn't the open one.
+    @State private var targets: [String: String] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -110,9 +112,15 @@ struct ProjectsSheet: View {
     @ViewBuilder
     private var detail: some View {
         if let key = selection, drafts[key] != nil {
-            ProjectEditor(draft: Binding(get: { drafts[key] ?? ProjectDraft() }, set: { drafts[key] = $0 }),
-                          registry: registry, scanAfter: $scanAfter)
-                .id(key)
+            VStack(spacing: 0) {
+                if drafts[key]?.isNew == true, model.instances.instances.count > 1 {
+                    instancePicker(key)
+                    Divider()
+                }
+                ProjectEditor(draft: Binding(get: { drafts[key] ?? ProjectDraft() }, set: { drafts[key] = $0 }),
+                              registry: registry, scanAfter: $scanAfter)
+                    .id(key)
+            }
         } else {
             ListEmptyState(title: "Projects", systemImage: "square.stack.3d.up",
                            message: "A project, such as Acme App, has locations (the folders its code is in) and scopes: one project-wide, and one per app or part, such as Android or iOS.") {
@@ -120,6 +128,21 @@ struct ProjectsSheet: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+    }
+
+    private func instancePicker(_ key: String) -> some View {
+        AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 220) {
+            Text(targets[key] == nil ? "Goes into \(model.instance.name), the open instance."
+                 : "Goes into \(model.instances.instance(targets[key]!)?.name ?? "another instance"). Switch to it to work on it.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Picker("Instance", selection: Binding(get: { targets[key] ?? model.instance.id },
+                                                  set: { targets[key] = $0 == model.instance.id ? nil : $0 })) {
+                ForEach(model.instances.instances) { Text($0.name).tag($0.id) }
+            }
+            .fixedSize()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private var footer: some View {
@@ -189,16 +212,26 @@ struct ProjectsSheet: View {
 
     private func save() {
         let keys = changed
-        let list = keys.compactMap { drafts[$0] }
+        let elsewhere = keys.filter { targets[$0] != nil && drafts[$0]?.isNew == true }
+        let list = keys.filter { !elsewhere.contains($0) }.compactMap { drafts[$0] }
         let newOnes = list.filter(\.isNew).count
         saving = true
         error = nil
         Task {
             do {
-                let made = try await model.saveProjects(list)
+                var placed: [String] = []
+                for key in elsewhere {
+                    guard let d = drafts[key], let id = targets[key], let target = model.instances.instance(id) else { continue }
+                    _ = try model.engine.addProject(d, to: target)
+                    placed.append("\(d.title) to \(target.name)")
+                    originals[key] = d
+                }
+                let made = list.isEmpty ? [] : try await model.saveProjects(list)
                 saving = false
                 dismiss()
-                if newOnes == 1, let last = made.last, list.last?.isNew == true {
+                if !placed.isEmpty {
+                    model.notice = "Added " + placed.joined(separator: " and ") + "."
+                } else if newOnes == 1, let last = made.last, list.last?.isNew == true {
                     model.openNewProject(last, scan: scanAfter)
                 } else {
                     model.notice = "Saved \(list.count == 1 ? list[0].title : "\(list.count) projects")."

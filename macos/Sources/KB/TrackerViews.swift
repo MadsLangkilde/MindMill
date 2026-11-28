@@ -733,7 +733,7 @@ private struct BacklogList: View {
         let everything = model.index.entries(project: project.id, section: .backlog)
             .filter { !searching || $0.matches(query) }
         let all = everything.filter { !$0.isDraft }
-        let prefix = model.settings(for: project.id).tracker.titlePrefix
+        let prefix = model.tracker(for: project.id).titlePrefix
         let proposed = all.filter { $0.backlogStatus == .proposed }
         let findings = model.duplicateFindings(for: proposed)
         let suggested = proposed.filter { findings[$0.id]?.alreadyCreated == nil }
@@ -1007,7 +1007,7 @@ struct ProposedBacklogView: View {
         let shown = model.tagFiltered(waiting, .backlog)
         let proposed = shown.filter { findings[$0.id]?.alreadyCreated == nil }
         let covered = shown.filter { findings[$0.id]?.alreadyCreated != nil }
-        let prefix = model.settings(for: project.id).tracker.titlePrefix
+        let prefix = model.tracker(for: project.id).titlePrefix
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 TagFilterBar(key: .backlog, available: waiting.map(\.tags), inset: 0)
@@ -1029,14 +1029,14 @@ struct ProposedBacklogView: View {
                     DuplicateCheckStatus(scope: project.id)
                 }
                 ForEach(proposed) { e in
-                    ProposedCard(entry: e, prefix: e.project == project.id ? prefix : model.settings(for: e.project).tracker.titlePrefix,
+                    ProposedCard(entry: e, prefix: e.project == project.id ? prefix : model.tracker(for: e.project).titlePrefix,
                                  finding: findings[e.id])
                 }
                 if !covered.isEmpty {
                     DisclosureGroup(isExpanded: model.fold("backlog.covered")) {
                         VStack(alignment: .leading, spacing: 14) {
                             ForEach(covered) { e in
-                                ProposedCard(entry: e, prefix: e.project == project.id ? prefix : model.settings(for: e.project).tracker.titlePrefix,
+                                ProposedCard(entry: e, prefix: e.project == project.id ? prefix : model.tracker(for: e.project).titlePrefix,
                                              finding: findings[e.id])
                             }
                         }
@@ -1136,7 +1136,7 @@ private struct ProposedCard: View {
                 DuplicateBox(entry: entry, finding: finding)
             }
             HStack(spacing: 10) {
-                Button(BacklogBatchCreateSheet.createLabel(model.settings(for: entry.project).tracker.kind) + "…") {
+                Button(BacklogBatchCreateSheet.createLabel(model.tracker(for: entry.project).kind) + "…") {
                     model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id)
                 }
                     .buttonStyle(.borderedProminent)
@@ -1336,7 +1336,7 @@ struct WorkItemHeaderButton: View {
 
     var body: some View {
         let url = model.workItemURL(item, project: scope)
-        let local = model.settings(for: scope).tracker.kind == "local"
+        let local = model.tracker(for: scope).kind == "local"
         Menu {
             if local, let n = Int(item) {
                 Button("Show in Backlog") { model.showLocalItem(n, project: scope) }

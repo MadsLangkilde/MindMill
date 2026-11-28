@@ -13,7 +13,8 @@ public enum VoiceOutput: Equatable {
     case transcript(role: String, text: String, final: Bool)
     /// The API engine: drop queued audio now.
     case clear
-    case fallback(reason: VoiceFailure, speech: String)
+    /// `message`: why, and what to do, for the screen.
+    case fallback(reason: VoiceFailure, speech: String, message: String)
 }
 
 public enum VoiceState: String, Equatable {
@@ -75,7 +76,7 @@ public final class VoiceConversation: Identifiable {
         case .done(_, let t) where !t.isEmpty: lines.append(Line(role: .assistant, text: t))
         case .action(_, let status, let speech, _) where status == "done": lines.append(Line(role: .action, text: speech))
         case .error(let m): lines.append(Line(role: .error, text: m))
-        case .fallback(_, let speech): lines.append(Line(role: .status, text: speech))
+        case .fallback(_, _, let message): lines.append(Line(role: .status, text: message))
         case .transcript(let role, let text, true):
             lines.append(Line(role: role == "user" ? .user : .assistant, text: text))
         default: break

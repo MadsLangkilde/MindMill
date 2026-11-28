@@ -547,7 +547,7 @@ struct BacklogCard: View {
             }
             if status == .proposed {
                 HStack(spacing: 12) {
-                    Button(BacklogBatchCreateSheet.createLabel(model.settings(for: entry.project).tracker.kind) + "…") {
+                    Button(BacklogBatchCreateSheet.createLabel(model.tracker(for: entry.project).kind) + "…") {
                         model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id)
                     }
                         .fontWeight(.semibold)
@@ -566,7 +566,7 @@ struct BacklogCard: View {
         var out = entry.scopes.isEmpty ? [entry.project] : entry.scopes
         let tags = Set(entry.tags.map { $0.lowercased() })
         for p in model.index.siblings(of: entry.project) where !out.contains(p.id) {
-            if model.settings(for: p.id).tracker.tags.contains(where: { tags.contains($0.lowercased()) }) { out.append(p.id) }
+            if model.tracker(for: p.id).tags.contains(where: { tags.contains($0.lowercased()) }) { out.append(p.id) }
         }
         return out
     }
@@ -620,14 +620,14 @@ struct EntryActionBanner: View {
             VStack(spacing: 0) {
                 bar(color: .green) {
                     KindChip(kind: entry.backlogKind)
-                    let prefix = model.settings(for: entry.project).tracker.titlePrefix
+                    let prefix = model.tracker(for: entry.project).titlePrefix
                     (Text(prefix).foregroundStyle(.secondary) + Text(entry.title)).lineLimit(1)
                 } actions: {
                     if busy { ProgressView().controlSize(.small) }
                     switch entry.backlogStatus {
                     case .proposed:
                         Button("Reject", role: .destructive) { model.rejectBacklog(entry.id) }.disabled(busy)
-                        Button(BacklogBatchCreateSheet.createLabel(model.settings(for: entry.project).tracker.kind) + "…") {
+                        Button(BacklogBatchCreateSheet.createLabel(model.tracker(for: entry.project).kind) + "…") {
                             model.backlogCreateRequest = BacklogCreateRequest(entry: entry.id)
                         }
                             .buttonStyle(.borderedProminent)

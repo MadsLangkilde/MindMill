@@ -312,6 +312,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            InstancesSection()
             Section {
                 HStack {
                     TextField("Knowledge base root", text: $path, prompt: Text(KBConfig.defaultRootPath))
@@ -330,7 +331,7 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                 }
             } header: {
-                Text("Knowledge Base")
+                Text("\(model.instance.name)'s Folder")
             }
             Section {
                 TextField("Your name", text: $myName, prompt: Text(model.tracker?.me ?? "As people write it"))

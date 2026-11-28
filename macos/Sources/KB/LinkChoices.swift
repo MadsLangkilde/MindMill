@@ -1,9 +1,17 @@
 import AppKit
 import SwiftUI
 
+// A key instead of `@Entry`: the Command Line Tools don't ship SwiftUI's macro plugin.
+private struct ChooseLinkKey: EnvironmentKey {
+    static let defaultValue: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
+}
+
 extension EnvironmentValues {
     /// Asks how to open a web link: in the user's browser, in Mindmill's own, or copied.
-    @Entry var chooseLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    var chooseLink: @MainActor (URL) -> Void {
+        get { self[ChooseLinkKey.self] }
+        set { self[ChooseLinkKey.self] = newValue }
+    }
 }
 
 extension View {

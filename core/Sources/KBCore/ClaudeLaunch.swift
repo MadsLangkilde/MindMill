@@ -215,7 +215,7 @@ public enum ClaudeModes {
 
     /// The overview session: above every session in Build mode.
     /// Every app session may refresh what the KB mirrors instead of asking the user to.
-    public static let sync = "The KB mirrors the Outlook calendar into meeting files and the app shows the tracker and pull requests. When something you need may be out of date (a meeting is missing, moved or cancelled, the user says it changed, or asks you to sync), refresh it yourself with `kb sync calendar` (add `--from YYYY-MM-DD --to YYYY-MM-DD` for days past the next two weeks), `kb sync email`, `kb sync tracker` or `kb sync prs`, then read again. It waits up to four minutes, so give the Bash call a timeout of 300000. Never ask the user to sync in the app; only when it reports that a sign-in is needed, tell them that."
+    public static let sync = "The KB mirrors the user's calendar into meeting files, when they connected one in Mindmill, and the app shows the tracker and pull requests. When something you need may be out of date (a meeting is missing, moved or cancelled, the user says it changed, or asks you to sync), refresh it yourself with `kb sync calendar` (add `--from YYYY-MM-DD --to YYYY-MM-DD` for days past the next two weeks), `kb sync email`, `kb sync tracker` or `kb sync prs`, then read again. It waits up to four minutes, so give the Bash call a timeout of 300000. Never ask the user to sync in the app; only when it reports that a sign-in is needed or that no calendar is connected, tell them that."
 
     public static func overseer(kbRoot: String) -> String {
         sync + "\n" + """
@@ -282,14 +282,18 @@ public enum ClaudeModes {
             + "Questions under `## Questions` that are still unticked and that the notes don't answer go in the summary under `### Open questions`, each as a follow-up proposal when it still matters; tick the ones the notes or transcript do answer and add an indented `  - Answer: <one line>` under each that has none. Do not ask for approval in chat. Write every proposed decision, fact and follow-up as an inbox entry (`kb inbox add …`) with `proposed_by: \(id)`, and every proposed PBI or bug as a backlog entry with `source: [\(id)]` (some may exist already, added during the meeting: find them with `kb list --section backlog` and fill in their summary and body from the notes instead of adding duplicates; also run `kb tracker items --search \"<2–3 keywords>\"` for each, and when a work item in Azure DevOps already covers it, don't propose it: write `#<number>` in the action item instead) (its title and body name the meeting in words, never by KB id, since work items are shared). " + WorkItemLinks.proposalRule + " A proposal that only the transcript supports gets a `--reason` starting with `From the transcript:`. Every line under `## Action items` gets its own follow-up, also when it gets a backlog entry too. When a decision or answer changes an existing fact, don't propose a new fact: run `kb fact challenge <fact id> --by \(id) --question '<what may have changed>'` (the corrected text on stdin with `--body-stdin` when it is clear). Then reply with one line: `PROPOSED <n>`."
     }
 
-    public static func morning(_ date: String, calendarSynced: Bool = false) -> String {
-        "When the user's message is `today`, run the mindmill:today skill for \(date): write `daily/\(date).md`, prepare meetings as files, and put proposals in the inbox and the backlog. Reply to any other message with `OK` and do nothing else."
-            + (calendarSynced ? " The app synced the calendar into meeting files a moment ago: skip the mindmill:calendar step and read the meetings from the KB." : "")
-            + " Reply with at most 5 lines."
+    public static func morning(_ date: String, calendarSynced: Bool = false, calendar: CalendarSource = .none) -> String {
+        let step = !calendar.isSet
+            ? " No calendar is connected to Mindmill: skip the mindmill:calendar step, read the meetings already in the KB, and don't list the missing calendar as a problem."
+            : calendarSynced
+            ? " The app synced the calendar into meeting files a moment ago: skip the mindmill:calendar step and read the meetings from the KB."
+            : " For the mindmill:calendar step: \(calendar.brief)"
+        return "When the user's message is `today`, run the mindmill:today skill for \(date): write `daily/\(date).md`, prepare meetings as files, and put proposals in the inbox and the backlog. Reply to any other message with `OK` and do nothing else."
+            + step + " Reply with at most 5 lines."
     }
 
-    public static func calendar(from: String, to: String) -> String {
-        "When the user's message is `sync`, run the mindmill:calendar skill for \(from) to \(to) and reply with exactly one line: the summary line `kb calendar import` printed, or `ERROR <reason>`. Reply to any other message with `OK` and do nothing else."
+    public static func calendar(from: String, to: String, source: CalendarSource) -> String {
+        "When the user's message is `sync`, run the mindmill:calendar skill for \(from) to \(to). \(source.brief) Reply with exactly one line: the summary line `kb calendar import` printed, or `ERROR <reason>`. Reply to any other message with `OK` and do nothing else."
     }
 
     public static func goal(_ id: String) -> String {
@@ -302,7 +306,7 @@ public enum ClaudeModes {
     public static let email =
         "When the user's message is `scan`, run the mindmill:email skill and reply with exactly one line: `EMAIL <n> proposed, <m> skipped, <d> discussions updated` (plus the most urgent item), or `ERROR <reason>`. Reply to any other message with `OK` and do nothing else."
 
-    /// The first message of a headless session: claude.ai connectors (Microsoft 365) are only connected from the second turn.
+    /// The first message of a headless session: claude.ai connectors are only connected from the second turn.
     public static let warmup = "Reply OK."
 
     public static func ask(_ project: String) -> String {

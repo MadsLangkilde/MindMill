@@ -58,7 +58,7 @@ extension AppModel {
     // MARK: Background check
 
     private var factCheckURL: URL {
-        AppPaths.file("factcheck.json")
+        AppPaths.instanceFile("factcheck.json")
     }
 
     /// New decisions and filed meetings, with a signature that changes when they do.

@@ -1,30 +1,41 @@
 ---
 name: calendar
-description: Mirror the user's calendar (Outlook or Google Calendar, as set in Mindmill) into the knowledge base as meeting files, so new, moved and cancelled meetings show up in the Mindmill app. Use for "sync my calendar", "update my meetings", from the morning routine, and when the Mindmill app's calendar sync starts it.
-allowed-tools: Bash(kb:*), mcp__claude_ai_Microsoft_365__outlook_calendar_search
+description: Mirror the user's calendar (Outlook, Google Calendar or another calendar connector) into the knowledge base as meeting files, so new, moved and cancelled meetings show up in the Mindmill app. Use for "sync my calendar", "update my meetings", from the morning routine, and when the Mindmill app's calendar sync starts it.
+allowed-tools: Bash(kb:*), mcp__claude_ai_Microsoft_365__outlook_calendar_search, mcp__claude_ai_Google_Calendar
 ---
 
 # Sync the calendar
 
 The CLI is `kb` (or `"${CLAUDE_PLUGIN_ROOT}/bin/kb"`). The window is the dates you were given, or today and
-tomorrow. `kb tools` says which calendar the user uses; read that one, never another that happens to be connected.
-When none is set, reply `ERROR No calendar is set in Mindmill (Settings → Connections → What you use).`
+tomorrow.
 
-1. **Microsoft 365:** call `outlook_calendar_search` with `query: "*"`, `afterDateTime: <from>T00:00`,
-   `beforeDateTime: <day after to>T00:00`, `limit: 25`, `order: "oldest"`, `offset: 0`. While the response
-   ends with a `nextOffset`, call it again with that offset.
-   **Google Calendar:** list the events in the window with its connector, every page, and map each one to the
-   fields below: `summary` → `subject`, `start`/`end` (`{"dateTime": …}`; an all-day event has only a `date`:
-   `isAllDay: true`), the organizer's display name → `organizerName`, attendees' display names → `namedAttendees`,
-   `location`, `description` → `summary`, `status: cancelled` → `isCancelled`, `htmlLink` → `webLink`.
+**Which calendar.** The Mindmill app tells you which connector to read. Without that, `kb tools` says which calendar
+the user uses; read that one, never another that happens to be connected. When neither says, reply
+`ERROR No calendar is set in Mindmill. Choose one in Settings → Connections.`
+Only ever read the calendar: never create, change, accept or decline an event.
+
+1. Fetch every event in the window:
+   - **claude.ai Microsoft 365** (Outlook): call `outlook_calendar_search` with `query: "*"`,
+     `afterDateTime: <from>T00:00`, `beforeDateTime: <day after to>T00:00`, `limit: 25`, `order: "oldest"`,
+     `offset: 0`. While the response ends with a `nextOffset`, call it again with that offset.
+   - **Any other calendar** (Google Calendar or another connector): use its tool that lists or searches events,
+     for the primary calendar, from `<from>` 00:00 to the day after `<to>` 00:00 in the user's time zone, with
+     recurring events expanded into single occurrences. Follow its paging until there are no more.
 2. If the tool is missing, needs sign-in or returns an error, **stop**. Don't run `kb`, since an empty import
-   would mark meetings cancelled. Reply `ERROR <the reason>` and, when it needs sign-in, add how: "Run `/mcp` and
-   sign in to <the connector>."
-3. Pipe the events into the importer with these fields only, values copied exactly from the tool (or mapped as above):
-   `id`, `subject`, `start`, `end`, `organizerName`, `namedAttendees` as `[{"name": "…"}]`, `location`,
-   `summary`, `isAllDay`, `isCancelled`, `webLink`. **Leave out every email address** (`organizer`,
-   `attendees`, the `address` of each attendee): the KB stores names only, and a privacy hook may refuse a
-   command that contains the user's address.
+   would mark meetings cancelled. Reply `ERROR <the reason>` and, when it needs sign-in, add: "Run `/mcp` and
+   authenticate <the connector's name>."
+3. Pipe the events into the importer. **Leave out every email address** (organizer, attendees, the `address` of
+   each attendee): the KB stores names only, and a privacy hook may refuse a command that contains the user's
+   address.
+   - **Outlook**: these fields only, values copied exactly from the tool: `id`, `subject`, `start`, `end`,
+     `organizerName`, `namedAttendees` as `[{"name": "…"}]`, `location`, `summary`, `isAllDay`, `isCancelled`,
+     `webLink`.
+   - **Any other calendar**: one object per event in Mindmill's own shape: `id` (the event's id, the same for
+     the same occurrence every time), `title`, `start` and `end` (`YYYY-MM-DDTHH:MM` in the user's time zone, or
+     `YYYY-MM-DD` for all-day), `all_day`, `cancelled`, `response` (`declined` when the user declined, else
+     empty), `organizer` and `attendees` (display names; skip anyone with no name), `location`, `online_url`
+     (the video link: Meet, Zoom, Teams), `calendar_url` (the link to the event), `body` (the description,
+     plain text), `series` (the recurring event's id, empty for a single event).
 
    ```sh
    kb calendar import --from <from> --to <to> <<'JSON'

@@ -489,7 +489,7 @@ public final class TestRunner {
         /// Names the first error in the log, so the reason shows without opening it.
         func failed(_ d: inout TestDelivery, _ message: String) -> TestDelivery {
             let base = message.replacingOccurrences(of: " See the log in Test.", with: "")
-            let reason = XcodeSchemes.firstError(log).map { " \($0)" } ?? ""
+            let reason = XcodeSchemes.firstError(log).map { " " + $0.prefix(1).uppercased() + $0.dropFirst() } ?? ""
             return self.failed(&d, base + reason)
         }
         if let why = unavailable(t, method: methodID) { return failed(&d, why) }
@@ -831,9 +831,10 @@ public final class TestRunner {
     // MARK: Status
 
     /// Detects the scope's targets the first time its status is asked for (a project-wide scope covers its scopes'
-    /// repositories), so a client needn't call `test.detect` first.
-    func detectIfNeverDone(_ scope: String) {
-        guard center.store[scope].targets.isEmpty, !checkouts(scope).isEmpty else { return }
+    /// repositories), so a client needn't call `test.detect` first, and once more when an older detector found them.
+    func detectIfNeeded(_ scope: String) {
+        let plan = center.store[scope]
+        guard plan.targets.isEmpty || plan.detectorVersion < ProjectDetector.version, !checkouts(scope).isEmpty else { return }
         detectTargets(scope)
     }
 
@@ -846,7 +847,7 @@ public final class TestRunner {
     /// `checking` is true, with what depends on them unknown rather than missing. A phone ([platform]) gets only the
     /// targets it can try itself.
     public func statusJSON(scope: String, platform: String? = nil) -> JSONValue {
-        detectIfNeverDone(scope)
+        detectIfNeeded(scope)
         let checking = center.facts.gathered == nil
         if checking, engine.shell != nil { Task { [weak self] in await self?.gatherFacts() } }
         let plan = center.store[scope]
@@ -879,7 +880,11 @@ public final class TestRunner {
             ? .string("None of \(engine.index.project(scope)?.title ?? scope)'s repositories is on this \(engine.platform.machineWord): add its folder in the project's settings.")
             : .null
         return ["targets": .array(targets), "compatibility": compat, "note": note, "checking": .bool(checking),
-                "deliveries": .array(center.deliveries.filter { $0.scope == scope && $0.phoneKind != nil }.prefix(15).map(\.summary))]
+                "deliveries": .array(center.deliveries.filter { $0.scope == scope && $0.phoneKind != nil }.prefix(15).map { d in
+                    guard case .object(var o) = d.summary else { return d.summary }
+                    o["hasLog"] = .bool(center.hasLog(d.id))
+                    return .object(o)
+                })]
     }
 
     public func statusResult(scope: String) -> ActionResult {
@@ -902,8 +907,8 @@ public final class TestRunner {
 
     /// Registers the testing methods and actions; `engine.tests` (and its saved state) is only read when one is called.
     static func register(on engine: MindmillEngine) {
-        engine.methods.register(["test.status", "test.download", "test.installed", "test.send", "preview.get", "review.list",
-                                 "review.respond"]) { method in
+        engine.methods.register(["test.status", "test.download", "test.installed", "test.send", "test.log", "test.sources", "preview.get",
+                                 "review.list", "review.respond"]) { method in
             { [unowned engine] client, p in try await engine.tests.call(method, p, from: client) }
         }
         let a = engine.actions
@@ -973,6 +978,22 @@ public final class TestRunner {
             }
             remote.sendDelivery(event, platform: d.platform)
             return ["sent": true, "platform": d.platform.map(JSONValue.string) ?? .null]
+
+        case "test.log":
+            guard let id = p["delivery"]?.string, center.deliveries.contains(where: { $0.id == id }) else { throw RemoteError.notFound("No such build") }
+            guard let log = center.log(id) else { throw RemoteError.notFound("This build has no log yet") }
+            return ["log": .string(String(log.suffix(60000))), "firstError": XcodeSchemes.firstError(log).map(JSONValue.string) ?? .null]
+
+        case "test.sources":
+            guard let scope = p["scope"]?.string ?? engine.scope else { throw RemoteError.badParams("scope") }
+            detectIfNeeded(scope)
+            let local = await localBranch(scope)
+            let sessions = await sessionsWithCopies(scope)
+            return ["local": ["branch": local.map(JSONValue.string) ?? .null],
+                    "sessions": .array(sessions.map { s in
+                        ["id": .string(s.session.id), "title": .string(SessionTitle.split(s.session.title).text),
+                         "branch": s.branch.map(JSONValue.string) ?? .null]
+                    })]
 
         case "preview.get":
             guard let id = p["delivery"]?.string, id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }),

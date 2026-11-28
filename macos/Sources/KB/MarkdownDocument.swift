@@ -80,9 +80,17 @@ struct MarkdownDocument: View {
     }
 }
 
+// A key instead of `@Entry`: the Command Line Tools don't ship SwiftUI's macro plugin.
+private struct FindHighlightKey: EnvironmentKey {
+    static let defaultValue = ""
+}
+
 extension EnvironmentValues {
     /// What ⌘F in a conversation looks for: the messages mark every place it appears.
-    @Entry var findHighlight = ""
+    var findHighlight: String {
+        get { self[FindHighlightKey.self] }
+        set { self[FindHighlightKey.self] = newValue }
+    }
 }
 
 extension AttributedString {

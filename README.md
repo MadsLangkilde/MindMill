@@ -27,12 +27,16 @@ The first time it opens, Mindmill walks through setup:
 1. **Your AI.** Pick the brain (Claude Code today), and optionally other models for specific tasks. Mindmill checks it's
    installed (and offers to install it in Terminal), that you're signed in, and that Python 3 is there (it offers
    Apple's command line tools). **Add to Claude Code** also makes `/mindmill` work in Terminal and your editor.
-2. **Knowledge base.** Where it lives, and a first project.
-3. **Your tools.** Where you track work (Azure DevOps, Jira, GitHub, Linear or Mindmill's own tracker) and mail, calendar,
-   chat and docs. **Set Up with Claude** starts a session that checks each tool, helps you connect what's missing and
-   saves Mindmill's settings.
+2. **Knowledge base.** Mindmill's own folder for everything it keeps across all your projects, not a project's folder:
+   a new or empty folder (it suggests `~/Mindmill/knowledgebase`) or a knowledge base you already have. Then add at
+   least one project, with its repository folders; Continue waits for it.
+3. **Your tools.** Where you track work (Azure DevOps, Jira, GitHub, Linear or Mindmill's own tracker), which calendar
+   to mirror (none, Outlook, Google Calendar or another calendar connector; optional), and mail, chat and docs.
+   **Set Up with Claude** starts a session that checks each tool, helps you connect what's missing and saves
+   Mindmill's settings.
 
-Run it again from **Mindmill → Set Up Mindmill…**, or **Settings → Connections** for just the tools. **Settings → AI** changes
+Setup also comes back by itself when the folder Mindmill is set to holds no knowledge base. Run it again from
+**Mindmill → Set Up Mindmill…**, or **Settings → Connections** for just the tools and the calendar. **Settings → AI** changes
 the brain and the model per task.
 
 **Building it:** `macos/build.sh --install` puts `Mindmill.app` in `~/Applications`; `macos/package.sh` builds the DMG in
@@ -57,7 +61,7 @@ The knowledge base defaults to `~/projects/knowledge`. Change it in `~/.config/k
 | `mindmill:ask` | Answer a question from every source: the knowledge base, code, related projects, wiki, work items, Teams, email, docs, MCP, commands |
 | `mindmill:brief` | What the KB says about the task at hand |
 | `mindmill:decide` | Record a decision, supersede one, or propose one to the inbox |
-| `mindmill:calendar` | Mirror today's and tomorrow's events (Outlook or Google Calendar) as meeting files |
+| `mindmill:calendar` | Mirror the calendar's events (Outlook, Google Calendar or another connector) as meeting files |
 | `mindmill:email` | Propose reminders from new email that needs you, keep open discussions up to date; skip newsletters and notifications |
 | `mindmill:reference` | Save a copy of an email or a chat (Teams, Slack) in References, without email addresses |
 | `mindmill:discussion` | Track an email thread or chat that isn't settled: points, open questions, findings; file the findings when ready |
@@ -98,7 +102,7 @@ double-click), and you can add steps of your own. The morning routine and **Find
 finished (PRs, work items, meetings, decisions) and put what counts under **Proposed for Progress**, to add as it
 is, edit first, or dismiss. Active goals stay a
 side agenda: at most one quiet line in a session brief, in a meeting's prep and in the day plan, and never
-during a live meeting. When Microsoft 365 needs signing in, Mindmill says
+during a live meeting. When the calendar needs signing in, Mindmill says
 so and **Sign In** opens `claude /mcp` in Terminal.
 
 ## Inbox, backlog and follow-ups
@@ -220,6 +224,11 @@ of the window with why and the fix: **Reconnect…** opens claude.ai's Connector
 **Check Again**, and **Troubleshoot with Claude** starts a session that tests each tool and walks you through it.
 Once it works again, Mindmill syncs the calendar by itself. Settings → Connections shows the same, per tool.
 
+**The calendar is optional.** Mindmill mirrors one calendar's meetings as meeting files: Outlook (Microsoft 365), Google
+Calendar or another calendar connector, picked in setup or **Settings → Connections → Calendar**. Without one nothing
+waits on it: you add meetings yourself, the morning routine works from those, and the Meetings and Today views say
+where to connect one. A setup finished before the choice existed keeps Microsoft 365 when Claude has that connector.
+
 **Attachments in sessions:** paste files (⌘V after copying them in Finder, one or many), a picture you copied in a
 browser, or drop files and images on the input box, or use the paperclip. They wait above the box until you send,
 and show with your message. Claude sees images directly and reads the other files from where they are; a pasted
@@ -291,6 +300,15 @@ scope start in the first repository it works on and can reach all of them. **Pro
 repositories with their branch and how far behind they are; **Pull** (or **Pull All**, or View → Pull
 Repositories of This Scope) fast-forwards them and never merges or overwrites local work. Sessions can do the
 same with `kb repos --fetch` and `kb repos pull [--repo <scope>]`.
+
+**Instances.** A Mindmill instance is a knowledge base of its own, with its own projects, scopes, sessions and
+factories: one for work and one for private things, one per client, however you want to split them. Settings →
+Knowledge Base lists them: **New Instance…** takes a name and a folder (new, empty, or a knowledge base already),
+**Switch** (or Mindmill → Switch Instance, or the phone) restarts Mindmill on another one, and **More** renames
+one, shows it in Finder or removes it from the list, leaving its folder alone. kb's config
+(`~/.config/kb/config.json`) lists them; its `root` is the open one's folder, so `kb` and the skills follow the
+switch. The New Project sheet asks which instance a new project goes into, and its folder pickers can make a new
+folder for it.
 
 **Switching project:** the toolbar's project menu (Plan and Build) lists every project and its scopes;
 ⌃⌘1–9 switch to a project on the scope last used there. **Project** (top of the Plan sidebar) lists the project's repositories, whether each is on this Mac, and the
@@ -445,14 +463,32 @@ in a session's prompt dictates into it instead.
 - **Built-in voice** (default, no setup): on-device speech recognition and the system voices, with the brain doing
   the thinking in one persistent session per conversation. Enhanced and Premium voices sound best; Settings → Voice
   links to where macOS downloads them.
-- **Voice API** (optional): add a key for OpenAI Realtime, Gemini Live or xAI Grok Voice in Settings → Voice. Keys
-  stay in this Mac's Keychain; the phone's audio goes through the Mac. If the API fails, voice falls back to
-  built-in and says so.
+- **Voice API** (optional): add a key for OpenAI Realtime, Gemini Live or xAI Grok Voice in Settings → Voice, or
+  send one from a paired phone. Keys stay in this Mac's Keychain and never go back to the phone; the phone's audio
+  goes through the Mac. If the API fails, voice falls back to built-in and says why. After Mindmill is updated,
+  macOS asks once for your login password before it reads a key; Mindmill asks for it at launch, and a phone that
+  needs the key meanwhile hears that it's waiting.
 
 **The phone apps** (Mindmill for Android and iOS, separate projects) connect to this Mac over the local network or Tailscale once paired in Settings →
 Remote. It has the backlog, facts, follow-ups, meetings (with the phone listening to the room and sharing its
 screen), sessions, factories, voice, and test builds and review cards from Build. The protocol is in
 [docs/remote-api.md](docs/remote-api.md).
+
+A sleeping Mac can't answer, and macOS sleeps when the lid closes. **Settings → Remote → Stay reachable with the lid
+closed** keeps it awake while it's plugged in and Mindmill is open, lid closed or not; on battery it sleeps as usual.
+Only an administrator can turn lid sleep off, so it installs a small helper once (macOS asks for your password): a
+launchd daemon (`/Library/LaunchDaemons/dk.langkilde.kb.stayawake.plist`) that runs `pmset disablesleep` only while
+those hold, and turns sleep back on, sleeping a closed Mac, when they don't. **Remove Helper…** takes it out again.
+
+**In the background** (Settings → General, or the setup's In the Background step; all off until turned on):
+- **Keep running when the window is closed**: Mindmill stays in the menu bar (Open Mindmill, the instance, Quit),
+  so the phone, sessions and factories keep working.
+- **Open Mindmill when you log in**: a login item (`~/Library/LaunchAgents/dk.langkilde.kb.login.plist`) that opens
+  it in the menu bar, or with its window when it doesn't keep running.
+- **Let a paired phone start Mindmill**: a launcher (`~/Library/LaunchAgents/dk.langkilde.kb.launcher.plist`)
+  listening on the remote port + 1 opens Mindmill in the menu bar when a phone paired under Remote asks, even after
+  it was quit. Only a paired phone can (it proves it with its token, which never goes over that connection), and
+  only while the Mac is awake. It also turns on running in the background and remote access.
 
 ## Layout
 

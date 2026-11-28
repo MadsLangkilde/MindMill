@@ -228,7 +228,7 @@ public struct SprintWatch: Codable, Equatable, Sendable {
     // MARK: File
 
     public static func url(base: URL? = nil) -> URL {
-        (base.map { $0.appendingPathComponent("KB") } ?? AppPaths.data).appendingPathComponent("sprints.json")
+        (base.map { $0.appendingPathComponent("KB") } ?? AppPaths.instanceData).appendingPathComponent("sprints.json")
     }
 
     public static func load(from url: URL) -> SprintWatch {

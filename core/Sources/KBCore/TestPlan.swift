@@ -190,10 +190,12 @@ public struct ScopeTestPlan: Codable, Equatable, Sendable {
     public var dontAsk = false
     public var suggestions: [TestSuggestion] = []
     public var compatibility: CompatibilityResult?
+    /// The `ProjectDetector.version` that found the targets: an older one looks again once.
+    public var detectorVersion = 0
 
     public init() {}
 
-    enum CodingKeys: String, CodingKey { case targets, modules, deliverWhen, dontAsk, suggestions, compatibility }
+    enum CodingKeys: String, CodingKey { case targets, modules, deliverWhen, dontAsk, suggestions, compatibility, detectorVersion }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -203,6 +205,7 @@ public struct ScopeTestPlan: Codable, Equatable, Sendable {
         dontAsk = try c.decodeIfPresent(Bool.self, forKey: .dontAsk) ?? false
         suggestions = try c.decodeIfPresent([TestSuggestion].self, forKey: .suggestions) ?? []
         compatibility = try c.decodeIfPresent(CompatibilityResult.self, forKey: .compatibility)
+        detectorVersion = try c.decodeIfPresent(Int.self, forKey: .detectorVersion) ?? 0
     }
 
     public func modules(of app: String) -> [TestTarget] { modules.filter { $0.partOf == app } }
@@ -233,9 +236,30 @@ public struct ScopeTestPlan: Codable, Equatable, Sendable {
     /// unless they were never set up.
     public mutating func merge(detected: [TestTarget]) {
         let apps = detected.filter { $0.partOf == nil }
-        for d in apps where !targets.contains(where: { $0.id == d.id }) { targets.append(d) }
         let ids = Set(apps.map(\.id))
+        for d in apps where !targets.contains(where: { $0.id == d.id }) {
+            // The same app found in another folder of its repository (as when detection learnt where a Gradle
+            // build's root is): it takes the folder and the commands found there and keeps what the user set up.
+            if let i = targets.firstIndex(where: { !ids.contains($0.id) && $0.repo == d.repo && $0.type == d.type && $0.partOf == nil }) {
+                var moved = d
+                let old = targets[i]
+                moved.method = old.method
+                moved.url = old.url
+                moved.port = old.port
+                moved.pages = old.pages
+                moved.devices = old.devices
+                moved.scheme = old.scheme
+                moved.ascKeyID = old.ascKeyID
+                moved.ascIssuer = old.ascIssuer
+                moved.serialCommand = old.serialCommand
+                moved.confirmed = old.confirmed
+                targets[i] = moved
+            } else {
+                targets.append(d)
+            }
+        }
         targets.removeAll { !ids.contains($0.id) && $0.method == nil }
+        detectorVersion = ProjectDetector.version
         let known = modules
         modules = detected.filter { $0.partOf != nil }.map { m in known.first { $0.id == m.id } ?? m }
     }
@@ -257,7 +281,7 @@ public struct TestStore: Codable, Equatable, Sendable {
     public init() {}
 
     public static var defaultURL: URL {
-        AppPaths.file("testing.json")
+        AppPaths.instanceFile("testing.json")
     }
 
     public static func load(_ url: URL = defaultURL) -> TestStore {

@@ -70,6 +70,7 @@ public struct TestDelivery: Codable, Equatable, Sendable, Identifiable {
         if let url { d["url"] = .string(url) }
         if let size { d["size"] = .number(Double(size)) }
         if let message { d["message"] = .string(message) }
+        if let session { d["session"] = .string(session) }
         return .object(d)
     }
 }

@@ -156,6 +156,8 @@ extension MindmillEngine {
                 }
             }),
             "sections": .array(KBSection.allCases.map { .string($0.rawValue) }),
+            "instance": instance.map { ["id": .string($0.id), "name": .string($0.name)] } ?? .null,
+            "launcher": launcherPort.map { ["port": .number(Double($0))] } ?? .null,
         ]
     }
 

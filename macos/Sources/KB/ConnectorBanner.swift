@@ -5,13 +5,14 @@ import SwiftUI
 /// Shown wherever Claude needs a tool (calendar, Teams, email, Jira…) that is signed out or failing: why, and the fix.
 struct ConnectorBanner: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
 
     private var problems: [ClaudeConnectors.Problem] {
         var out = model.connectorProblems
-        // A sync can find Microsoft 365 refused before `claude mcp list` has been read.
-        if model.microsoft365NeedsSignIn, !out.contains(where: { $0.service.id == "m365" }),
-           let m365 = ClaudeConnectors.catalog.first(where: { $0.id == "m365" }) {
-            out.insert(.init(service: m365, server: .init(name: AppModel.microsoft365, target: "", status: .needsAuth)), at: 0)
+        let calendar = model.calendarSource
+        // A sync can find the calendar refused before `claude mcp list` has been read, or missing from it.
+        if model.calendarNeedsSignIn, !out.contains(where: { $0.server.name == calendar.server }) {
+            out.insert(calendar.problem(in: model.connectorServers, checked: model.connectorsChecked != nil), at: 0)
         }
         return out
     }
@@ -26,8 +27,8 @@ struct ConnectorBanner: View {
                         Text(p.headline).fontWeight(.semibold)
                         Text(p.advice).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
-                    if problems.contains(where: { $0.service.id == "m365" }) {
-                        Text("Until then meetings and email aren't synced.").foregroundStyle(.secondary)
+                    if calendarAffected(problems) {
+                        Text("Until then the calendar isn't synced.").foregroundStyle(.secondary)
                     }
                     Text(model.connectorsChecking ? "Checking now…"
                          : model.connectorsChecked.map { "Checked at \(MeetingController.clock($0)). Mindmill checks again by itself and syncs once it works." } ?? "")
@@ -40,6 +41,13 @@ struct ConnectorBanner: View {
                         .help(problems.first?.server.fromClaudeAI ?? true
                               ? "Opens claude.ai → Settings → Connectors. Mindmill checks again when you come back."
                               : "Opens Claude Code's /mcp in Terminal.")
+                    if calendarAffected(problems) {
+                        Button("Choose Calendar…") {
+                            SettingsPane.connections.select()
+                            openSettings()
+                        }
+                        .help("Pick another calendar, or none, in Settings → Connections")
+                    }
                     if model.connectorsChecking {
                         ProgressView().controlSize(.small)
                     } else {
@@ -57,31 +65,47 @@ struct ConnectorBanner: View {
             .overlay(alignment: .bottom) { Divider() }
         }
     }
+
+    private func calendarAffected(_ problems: [ClaudeConnectors.Problem]) -> Bool {
+        let calendar = model.calendarSource
+        return calendar.isSet && problems.contains { $0.server.name == calendar.server }
+    }
 }
 
-/// Calendar sync state and a button to sync now.
+/// Calendar sync state and a button to sync now; without a calendar, a button to choose one.
 struct CalendarSyncButton: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         let s = model.calendarSync
-        Button {
-            model.syncCalendar()
-        } label: {
-            if model.calendar.isRunning {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: s.error == nil ? "calendar.badge.clock" : "calendar.badge.exclamationmark")
-                    .foregroundStyle(s.error == nil ? Color.primary : .orange)
+        if !model.calendarSource.isSet {
+            Button {
+                SettingsPane.connections.select()
+                openSettings()
+            } label: {
+                Image(systemName: "calendar.badge.plus")
             }
+            .help("No calendar is connected, so meetings only show when you add them. Choose one in Settings → Connections to have them appear by themselves.")
+        } else {
+            Button {
+                model.syncCalendar()
+            } label: {
+                if model.calendar.isRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: s.error == nil ? "calendar.badge.clock" : "calendar.badge.exclamationmark")
+                        .foregroundStyle(s.error == nil ? Color.primary : .orange)
+                }
+            }
+            .disabled(model.calendar.isRunning || model.morning.isBusy)
+            .help(help(s))
         }
-        .disabled(model.calendar.isRunning || model.morning.isBusy)
-        .help(help(s))
     }
 
     private func help(_ s: CalendarSyncState) -> String {
         if model.calendar.isRunning { return "Syncing the calendar…" }
-        var lines = ["Sync the calendar now (today and tomorrow)."]
+        var lines = ["Sync \(model.calendarSource.title) now (today through the next two weeks)."]
         if let d = s.lastSuccess { lines.append("Last synced \(MeetingController.clock(d)): \(s.summary ?? "")") }
         if let e = s.error { lines.append("Last attempt failed: \(e)") }
         return lines.joined(separator: "\n")

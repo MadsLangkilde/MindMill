@@ -5,7 +5,7 @@ import Foundation
 public enum CrewDir {
     public static func url(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         if let v = environment["KB_CREW_DIR"], !v.isEmpty { return URL(fileURLWithPath: KBConfig.expandTilde(v)) }
-        return AppPaths.file("crew")
+        return AppPaths.instanceFile("crew")
     }
 }
 

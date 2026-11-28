@@ -130,6 +130,17 @@ public final class RemoteServer {
     public func saveDevices() {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(devices) { try? data.write(to: devicesURL, options: .atomic) }
+        writeLauncherKeys()
+    }
+
+    /// The paired phones' token hashes for the launcher (`BackgroundAgents`), which can't read devices.json.
+    public func writeLauncherKeys() {
+        let url = BackgroundAgents.keysURL(remoteFolder: folder)
+        let text = BackgroundAgents.keysText(tokenHashes: devices.devices.map(\.tokenHash))
+        guard (try? String(contentsOf: url, encoding: .utf8)) != text else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? Data(text.utf8).write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     public func start() {

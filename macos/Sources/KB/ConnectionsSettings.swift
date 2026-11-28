@@ -13,7 +13,7 @@ extension AppModel {
 }
 
 /// Settings → Connections: the tools KB reaches through Claude (Jira, Microsoft 365, Gmail, Slack and more), how
-/// each scope tracks work, and adding a tool of your own.
+/// each scope tracks work, which calendar Mindmill mirrors, and adding a tool of your own.
 struct ConnectionsSettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var servers: [ClaudeConnectors.Server] = []
@@ -60,6 +60,12 @@ struct ConnectionsSettingsView: View {
                 Text("Azure DevOps works directly. Jira goes through Claude's Atlassian connector. Mindmill's own tracker needs nothing: features, PBIs, bugs and tasks with a board and optional sprints, kept in the knowledge base.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            Section("Calendar") {
+                calendarPicker
+                if model.calendarSource.isSet { calendarStatusRow }
+                Text("Mindmill mirrors this calendar's meetings so you can prepare them and take notes. It's optional: without one you add meetings yourself, and nothing else waits on it.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Section("Tools through \(Brain.name)") {
                 ForEach(ClaudeConnectors.catalog) { service in serviceRow(service) }
             }
@@ -76,6 +82,48 @@ struct ConnectionsSettingsView: View {
         .onAppear { if !loaded { refresh() } }
         .sheet(isPresented: $adding) { AddToolSheet { refresh() } }
         .sheet(isPresented: $settingUp) { SourceSetupSheet() }
+    }
+
+    private var calendarPicker: some View {
+        let current = model.calendarSource
+        let main = CalendarSource.choices(servers: servers).filter { $0.kind != .other }
+        var others = CalendarSource.choices(servers: servers, anyServer: true).filter { $0.kind == .other }
+        if current.kind == .other, !others.contains(current) { others.insert(current, at: 0) }
+        return Picker("Calendar", selection: Binding(get: { current.id }, set: { id in
+            if let c = (main + others).first(where: { $0.id == id }) { model.chooseCalendar(c) }
+        })) {
+            ForEach(main) { Text($0.title).tag($0.id) }
+            if !others.isEmpty {
+                Section("Other connectors") {
+                    ForEach(others) { Text($0.title).tag($0.id) }
+                }
+            }
+        }
+    }
+
+    private var calendarStatusRow: some View {
+        let source = model.calendarSource
+        let listed = source.server(in: servers)
+        return AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 240) {
+            statusDot(listed?.status)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(source.note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if loaded, listed == nil {
+                    Text("Claude isn't connected to it yet. Add it at claude.ai → Settings → Connectors; Mindmill syncs once it is.")
+                        .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                switch listed?.status {
+                case .connected?: Text("Connected").foregroundStyle(.green)
+                case .needsAuth?: Button("Sign In…") { signIn(listed!) }
+                case .failed?, .unknown?: Button("Fix…") { signIn(listed!) }
+                case nil: Button("Connect…") { NSWorkspace.shared.open(Self.connectorsURL) }
+                }
+            }
+            .fixedSize()
+        }
     }
 
     static func trackerTitle(_ kind: String) -> String {

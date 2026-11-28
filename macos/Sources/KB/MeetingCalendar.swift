@@ -17,6 +17,7 @@ struct MeetingsView: View {
         let byDay = Dictionary(grouping: dated, by: \.date)
         let unsaved = model.document.flatMap { $0.isNew && $0.id.project == project.id && $0.id.section == .meetings ? $0 : nil }
         VStack(spacing: 0) {
+            NoCalendarNotice()
             CalendarSyncProblem()
             MonthCalendar(month: $month, selected: $selected, meetings: byDay)
             ListSearchField(key: .section(.meetings), prompt: "Search meetings")
@@ -32,7 +33,7 @@ struct MeetingsView: View {
                             Text("No meetings.").foregroundStyle(.secondary).font(.callout)
                         }
                         rows(day)
-                        OutlookWeekRow(day: selected)
+                        CalendarWeekRow(day: selected)
                     } header: {
                         Text(Self.heading(selected))
                     }
@@ -86,8 +87,8 @@ private struct CalendarSyncProblem: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if let error = model.calendarSync.error, !model.microsoft365NeedsSignIn, !ConnectorSignIn.isNeeded(error),
-           !model.calendar.isRunning {
+        if model.calendarSource.isSet, let error = model.calendarSync.error, !model.calendarNeedsSignIn,
+           !ConnectorSignIn.isNeeded(error), !model.calendar.isRunning {
             AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 200) {
                 Image(systemName: "calendar.badge.exclamationmark").foregroundStyle(.orange)
                 Text("The calendar didn't sync: \(error)").font(.callout).fixedSize(horizontal: false, vertical: true)
@@ -101,26 +102,55 @@ private struct CalendarSyncProblem: View {
     }
 }
 
-/// For a day past what the regular sync mirrors: fetch that week from Outlook.
-private struct OutlookWeekRow: View {
+/// Without a calendar, meetings only come from the user: say so, and where to connect one.
+private struct NoCalendarNotice: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        if !model.calendarSource.isSet {
+            AdaptiveCardLayout(spacing: 10, stackedSpacing: 6, minInfoWidth: 200) {
+                Image(systemName: "calendar.badge.plus").foregroundStyle(.secondary)
+                Text("No calendar is connected, so only meetings you add show here. Connect Outlook, Google Calendar or another calendar to have them appear by themselves.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 0) {
+                    Button("Connect a Calendar…") {
+                        SettingsPane.connections.select()
+                        openSettings()
+                    }
+                }
+                .fixedSize()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+}
+
+/// For a day past what the regular sync mirrors: fetch that week from the calendar.
+private struct CalendarWeekRow: View {
     @Environment(AppModel.self) private var model
     let day: String
 
     var body: some View {
+        let source = model.calendarSource.title
         let today = KBDate.today()
         let synced = KBDate.today(Calendar(identifier: .gregorian).date(byAdding: .day, value: AppModel.calendarDaysAhead, to: Date()) ?? Date())
         let week = MonthGrid.week(of: day)
         let sync = model.calendarSync
         let fetching = sync.range.map { $0.from <= day && day <= $0.to } ?? false
         let queued = sync.queued.map { $0.from <= day && day <= $0.to } ?? false
-        if day > synced {
+        if !model.calendarSource.isSet {
+            EmptyView()
+        } else if day > synced {
             HStack(spacing: 8) {
                 if fetching || queued {
                     ProgressView().controlSize(.small)
-                    Text(fetching ? "Getting week \(MonthGrid.weekNumber(day)) from Outlook…" : "Week \(MonthGrid.weekNumber(day)) is next in line")
+                    Text(fetching ? "Getting week \(MonthGrid.weekNumber(day)) from \(source)…" : "Week \(MonthGrid.weekNumber(day)) is next in line")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
-                    Button("Get Week \(MonthGrid.weekNumber(day)) from Outlook") {
+                    Button("Get Week \(MonthGrid.weekNumber(day)) from \(source)") {
                         model.syncCalendar(from: max(week.from, today), to: week.to)
                     }
                     .help("The calendar keeps two weeks ahead up to date by itself. This adds the meetings of this week.")
@@ -130,7 +160,7 @@ private struct OutlookWeekRow: View {
         } else if fetching, day >= today, sync.range?.from == today {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Updating from Outlook…").font(.callout).foregroundStyle(.secondary)
+                Text("Updating from \(source)…").font(.callout).foregroundStyle(.secondary)
             }
         }
     }

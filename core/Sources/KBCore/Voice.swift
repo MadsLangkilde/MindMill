@@ -129,13 +129,29 @@ public struct VoiceEngineChoice: Equatable, Sendable {
         case .badKey: return "The voice API key didn't work, so I'm switching to the built-in voice."
         case .quota: return "The voice API's quota ran out, so I'm switching to the built-in voice."
         case .network: return "I lost the voice API connection, so I'm switching to the built-in voice."
+        case .keyLocked: return "I couldn't read the voice API key on the Mac, so I'm switching to the built-in voice."
         case .other: return "The voice API stopped working, so I'm switching to the built-in voice."
+        }
+    }
+
+    /// Why it fell back and what to do, for the screen.
+    public static func fallbackMessage(_ reason: VoiceFailure, provider: String?, machine: String = "Mac") -> String {
+        let name = provider ?? "The voice API"
+        switch reason {
+        case .badKey: return "\(name) refused the key. Check it in Settings → Voice on the \(machine), or send it again from the phone."
+        case .quota: return "\(name)'s quota or credit has run out."
+        case .network: return "The \(machine) lost its connection to \(name)."
+        case .keyLocked:
+            return "The \(machine) couldn't read the \(name) key: macOS is asking for your login password there, as it does after Mindmill is updated. Enter it on the \(machine), or send the key again from the phone."
+        case .other: return "\(name) stopped working."
         }
     }
 }
 
 public enum VoiceFailure: String, Codable, Sendable {
     case badKey, quota, network, other
+    /// The key is saved but couldn't be read: macOS is waiting for the user to allow it.
+    case keyLocked
 
     /// From an HTTP status or a provider's error text.
     public static func classify(status: Int?, message: String) -> VoiceFailure {

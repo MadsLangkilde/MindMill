@@ -16,7 +16,7 @@ extension AppModel {
     static let taggedSections: Set<KBSection> = [.meetings, .facts, .followups, .backlog, .decisions, .architecture]
 
     private var tagWatchURL: URL {
-        AppPaths.file("tagwatch.json")
+        AppPaths.instanceFile("tagwatch.json")
     }
 
     private func tagCandidates() -> [String: String] {

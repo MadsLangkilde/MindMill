@@ -65,6 +65,16 @@ final class KeychainSecretStore: SecretStore, @unchecked Sendable {
                                     kSecAttrAccount as String: account, kSecReturnAttributes as String: true]
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
+
+    func secretStamp(_ name: String) -> String? {
+        let (service, account) = Self.item(name)
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                    kSecAttrAccount as String: account, kSecReturnAttributes as String: true]
+        var out: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess else { return nil }
+        let changed = (out as? [String: Any])?[kSecAttrModificationDate as String] as? Date
+        return changed.map { String($0.timeIntervalSince1970) } ?? "saved"
+    }
 }
 
 /// Real-time voice API keys, in the login Keychain of this Mac only. They never go to the phone.

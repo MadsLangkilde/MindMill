@@ -22,12 +22,17 @@ struct RemoteSettingsView: View {
                         .labelsHidden()
                         .frame(maxWidth: 90)
                         .disabled(enabled && remote.isRunning)
-                        .onSubmit { if enabled { remote.restart() } }
+                        .onSubmit {
+                            if enabled { remote.restart() }
+                            model.syncBackgroundAgents()
+                        }
                 }
                 .help(enabled && remote.isRunning ? "Turn remote access off to change the port" : "Press Return to use the new port")
             } header: {
                 Text("Remote access")
             }
+            Section("With the lid closed") { LidAwakeSettings() }
+            Section("Starting Mindmill from the phone") { PhoneStartSetting() }
             if enabled, remote.isRunning {
                 Section("Pair a phone") { PairingView(remote: remote) }
             }
@@ -238,7 +243,7 @@ private struct TroubleshootingView: View {
         DisclosureGroup("If the phone can't connect") {
             VStack(alignment: .leading, spacing: 6) {
                 tip("Same network or Tailscale", "The phone and this Mac must be on the same Wi-Fi, or both signed in to your Tailscale tailnet.")
-                tip("Mindmill must be running", "The Mac answers only while Mindmill is open and the Mac is awake.")
+                tip("Mindmill must be running", "The Mac answers only while Mindmill is open and the Mac is awake. Closing the lid puts it to sleep unless Stay reachable with the lid closed is on.")
                 tip("Firewall", "If macOS asked whether Mindmill may accept incoming connections, allow it. Check System Settings → Network → Firewall → Options.")
                 tip("Guest or office networks", "Some networks stop devices from reaching each other. Use Tailscale there.")
                 tip("Still nothing", "Press Restart above, then pair the phone again.")

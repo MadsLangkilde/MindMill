@@ -252,7 +252,7 @@ struct VoiceSettingsView: View {
                 Toggle("Stop speaking when I start talking", isOn: $prefs.bargeIn)
             }
             Section("Voice API keys") {
-                Text("Keys are stored in this Mac's Keychain and never leave it. The phone's voice goes through this Mac.")
+                Text("Keys are stored in this Mac's Keychain and never leave it. The phone's voice goes through this Mac, and a paired phone can send a key here too.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 ForEach(RealtimeProvider.all.filter { $0.available || showAllProviders }) { p in
                     ProviderKeyRow(provider: p, prefs: $prefs)

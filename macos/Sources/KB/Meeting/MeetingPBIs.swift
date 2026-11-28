@@ -190,7 +190,7 @@ struct MeetingPBISheet: View {
             Spacer()
             switch e.backlogStatus {
             case .proposed:
-                Button(BacklogBatchCreateSheet.createLabel(model.settings(for: e.project).tracker.kind) + "…") { create = BacklogCreateRequest(entry: e.id) }
+                Button(BacklogBatchCreateSheet.createLabel(model.tracker(for: e.project).kind) + "…") { create = BacklogCreateRequest(entry: e.id) }
                     .controlSize(.small)
             case .created:
                 if let wi = e.field("work_item") {

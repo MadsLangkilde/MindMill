@@ -132,6 +132,8 @@ public struct DetectedTarget: Equatable, Sendable, Codable {
 /// each folder is looked at on its own and a folder inside one already found for the same type is skipped.
 public enum ProjectDetector {
     static let swiftPackageForIOS = "Swift package for iOS"
+    /// Raised when detection finds targets differently, so plans found by an older one are looked at again.
+    public static let version = 1
 
     public static func detect(_ listing: RepoListing) -> [DetectedTarget] {
         var dirs: Set<String> = [""]
@@ -243,10 +245,17 @@ public enum ProjectDetector {
             }
         }
 
-        // Android: the application plugin in a Gradle build, or a manifest in the usual place.
+        // Android: the application plugin in a Gradle build, or a manifest in the usual place. A Gradle root (gradlew
+        // or a settings file) counts its modules' build files; any other folder only its own, so an app in
+        // `android/` is built from there, where its gradlew is, not from the repository above it.
         let gradle = files.filter { $0.hasSuffix("build.gradle") || $0.hasSuffix("build.gradle.kts") }
-        if gradle.contains(where: { let t = read($0); return t.contains("com.android.application") || t.contains("android.application") })
-            || has("app/src/main/AndroidManifest.xml") || has("src/main/AndroidManifest.xml") && has("build.gradle.kts") {
+        let gradleRoot = has("gradlew") || has("settings.gradle") || has("settings.gradle.kts")
+        func appliesApp(_ rel: String) -> Bool { let t = read(rel); return t.contains("com.android.application") || t.contains("android.application") }
+        let androidApp = gradleRoot
+            ? gradle.contains(where: appliesApp) || has("app/src/main/AndroidManifest.xml")
+            : ["build.gradle", "build.gradle.kts"].contains(where: { has($0) && appliesApp($0) })
+                || has("src/main/AndroidManifest.xml") && has("build.gradle.kts")
+        if androidApp {
             let wrapper = has("gradlew") ? "./gradlew" : "gradle"
             out.append(DetectedTarget(type: .android, path: dir, evidence: "Android Gradle project",
                                       startCommand: "\(wrapper) assembleDebug", testCommand: "\(wrapper) testDebugUnitTest"))

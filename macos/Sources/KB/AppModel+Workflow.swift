@@ -36,8 +36,14 @@ extension AppModel {
     /// The sidebar order: Inbox first while it has entries.
     func hasOverview(project: String) -> Bool { index.count(project: project, section: .overview) > 0 }
 
+    /// The scope's own settings, as Project Settings edits them.
     func settings(for project: String) -> ProjectSettings {
         ProjectSettings.load(project: project, root: rootURL)
+    }
+
+    /// The tracker a scope works in: its own, else its project's Overview's.
+    func tracker(for scope: String) -> ProjectSettings.Tracker {
+        ProjectSettings.tracker(scope: scope, root: rootURL)
     }
 
     // MARK: Windows

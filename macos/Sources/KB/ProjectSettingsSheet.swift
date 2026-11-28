@@ -67,6 +67,12 @@ struct ProjectSettingsSheet: View {
         }
     }
 
+    /// The Overview scope whose tracker this scope works in, when it has none of its own.
+    private var inheritedTrackerScope: KBProject? {
+        let owner = ProjectSettings.trackerScope(request.project, root: model.rootURL)
+        return owner == request.project ? nil : model.index.project(owner)
+    }
+
     private var trackerForm: some View {
         Form {
             Picker("Tracker", selection: $settings.tracker.kind) {
@@ -80,9 +86,13 @@ struct ProjectSettingsSheet: View {
                 }
             }
             .onChange(of: settings.tracker.kind) { _, _ in settings.hasTracker = true }
+            if !settings.ownsTracker, let owner = inheritedTrackerScope {
+                Text("No tracker of its own: it uses \(owner.title)'s, \(ConnectionsSettingsView.trackerTitle(model.trackerKind(request.project))), and its board. Pick a tracker here to give this scope its own.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             switch settings.tracker.kind {
             case "local":
-                Text("Features, PBIs, bugs and tasks live in this scope's folder in the knowledge base, with an optional sprint plan. Find them under Backlog: a list on the left and a board on the right. \(Brain.name) adds and updates them with `kb work`.")
+                Text("Features, PBIs, bugs and tasks live in this scope's folder in the knowledge base, with an optional sprint plan. Find them under Backlog: a list on the left and a board on the right. \(Brain.name) adds and updates them with `kb work`." + (model.index.project(request.project)?.wide == true ? " The project's other scopes without a tracker of their own use this board too." : ""))
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Toggle("Plan work in sprints", isOn: Binding(
                     get: { (model.localTrackers[request.project] ?? LocalTracker.load(scope: request.project, root: model.rootURL)).useSprints },

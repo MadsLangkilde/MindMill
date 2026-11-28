@@ -105,7 +105,7 @@ extension AppModel {
     // MARK: Conversations that aren't sessions
 
     private var meetingChatsDirectory: URL {
-        AppPaths.data.appendingPathComponent("meeting-chats", isDirectory: true)
+        AppPaths.instanceData.appendingPathComponent("meeting-chats", isDirectory: true)
     }
 
     /// Reads which meetings have a chat, once; `MeetingController` keeps it current after that.
